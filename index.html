@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mandelbulb</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+  canvas { display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #panel {
+    position: absolute; top: 12px; left: 12px; width: 230px;
+    padding: 10px 12px; border-radius: 8px;
+    background: rgba(10, 10, 20, 0.75); color: #ddd;
+    font: 12px/1.4 system-ui, sans-serif; user-select: none;
+    max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box;
+  }
+  #panel h1 { font-size: 14px; margin: 0 0 6px; color: #fff; }
+  #panel label { display: flex; justify-content: space-between; margin-top: 6px; }
+  #panel label:has(input[type=checkbox]) { justify-content: flex-start; gap: 4px; }
+  #panel input[type=range], #panel select { width: 100%; margin: 2px 0 0; }
+  #panel button { width: 100%; margin-top: 6px; }
+  #panel .hint { margin-top: 8px; color: #999; font-size: 11px; }
+  #panel .note { margin-top: 6px; color: #e8c170; font-size: 11px; }
+  #overlay {
+    position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.8); color: #eee; font: 14px/1.5 system-ui, sans-serif;
+  }
+  #overlay div { max-width: 420px; padding: 16px 20px; background: #15151f; border-radius: 8px; }
+  #overlay button { margin-top: 8px; padding: 6px 14px; font: inherit; }
+</style>
+</head>
+<body>
+<script>
+// ---------- Shaders ----------
+// Full-screen quad: texture coords (0..1) mapped straight to clip space.
+const vert = `
+attribute vec3 aPosition;
+attribute vec2 aTexCoord;
+void main() {
+  gl_Position = vec4(aTexCoord * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const frag = `
+precision highp float;
+
+uniform vec2  uRes;
+uniform vec3  uCamPos;
+uniform float uPower;
+uniform int   uIter;
+// Escape radius: 4 costs at most one extra iteration over 2 and gives a cleaner distance estimate.
+const float BAILOUT = 4.0;
+uniform float uThetaOff;
+uniform float uPhiOff;
+uniform float uGlow;
+uniform int   uPalette;
+uniform float uP;         // theta multiplier (= n except for the spherical (p, q) family)
+uniform float uQ;         // phi multiplier
+uniform int   uFormula;   // 0 Mandelbulb, 1 quaternion, 2 bicomplex, 3 cubic, 4 quintic, 5 power-nine, 6 spherical (p, q)
+uniform int   uJulia;     // 4D formulas: 1 = Julia set with constant uC
+uniform vec4  uC;
+uniform float uW;         // 4th coordinate of the 3D slice
+uniform float uRot4;      // rotation of the slice in the x-w plane
+
+const int MAX_STEPS = 200;
+
+// Standard Mandelbulb distance estimator (spherical coordinates, running derivative).
+// trap = smallest orbit radius, used for coloring.
+float bulbDE(vec3 pos, out float trap) {
+  pos = pos.xzy;               // make the bulb's symmetry axis point up (y)
+  vec3 z = pos;
+  float dr = 1.0;
+  float r = 0.0;
+  trap = 1e10;
+  for (int i = 0; i < 15; i++) {
+    if (i >= uIter) break;
+    r = length(z);
+    if (r > BAILOUT) break;
+    trap = min(trap, r);
+    r = max(r, 1e-6);
+    float theta = acos(clamp(z.z / r, -1.0, 1.0));
+    float phi = atan(z.y, z.x);
+    dr = pow(r, uPower - 1.0) * uPower * dr + 1.0;
+    float zr = pow(r, uPower);
+    theta = theta * uP + uThetaOff;
+    phi = phi * uQ + uPhiOff;
+    z = zr * vec3(sin(theta) * cos(phi), sin(phi) * sin(theta), cos(theta)) + pos;
+  }
+  r = max(r, 1e-6);
+  return 0.5 * log(r) * r / dr;
+}
+
+// Trig-free polynomial variants (Wikipedia "Mandelbulb": cubic, quintic, power-nine formulas).
+vec3 cubicStep(vec3 v) {
+  float x = v.x, y = v.y, z = v.z;
+  return vec3(x * x * x - 3.0 * x * (y * y + z * z),
+              -y * y * y + 3.0 * y * x * x - y * z * z,
+              z * z * z - 3.0 * z * x * x + z * y * y);
+}
+
+// One coordinate of the quintic with A = B = C = D = 0.
+float q5(float a, float b, float c) {
+  float a2 = a * a, b2 = b * b, c2 = c * c;
+  return a * a2 * a2 - 10.0 * a * a2 * (b2 + c2) + 5.0 * a * (b2 * b2 + c2 * c2);
+}
+
+// Based on z -> -z^5, which the article notes gives the more pleasing shape.
+vec3 quinticStep(vec3 v) {
+  return -vec3(q5(v.x, v.y, v.z), q5(v.y, v.z, v.x), q5(v.z, v.x, v.y));
+}
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+// Re((a + i*rho)^9), the short form of the power-nine polynomial.
+float re9(float a, float rho) {
+  vec2 w = vec2(a, rho);
+  vec2 w2 = cmul(w, w), w4 = cmul(w2, w2), w8 = cmul(w4, w4);
+  return cmul(w8, w).x;
+}
+
+vec3 power9Step(vec3 v) {
+  return vec3(re9(v.x, length(v.yz)), re9(v.y, length(v.zx)), re9(v.z, length(v.xy)));
+}
+
+// These maps aren't conformal, so the scalar derivative underestimates stretch;
+// the 0.6 factor keeps the ray from stepping through the surface.
+float polyDE(vec3 pos, out float trap) {
+  pos = pos.xzy;
+  float n = uFormula == 3 ? 3.0 : uFormula == 4 ? 5.0 : 9.0;
+  vec3 z = pos;
+  float dr = 1.0;
+  float r = length(z);
+  trap = 1e10;
+  for (int i = 0; i < 15; i++) {
+    if (i >= uIter) break;
+    r = length(z);
+    if (r > BAILOUT) break;
+    trap = min(trap, r);
+    dr = n * pow(r, n - 1.0) * dr + 1.0;
+    if (uFormula == 3) z = cubicStep(z);
+    else if (uFormula == 4) z = quinticStep(z);
+    else z = power9Step(z);
+    z += pos;
+  }
+  r = max(length(z), 1e-6);
+  return 0.6 * 0.5 * log(r) * r / dr;
+}
+
+// Place a 3D point in 4D: w = slice offset, then rotate in the x-w plane.
+vec4 to4D(vec3 p) {
+  vec4 q = vec4(p, uW);
+  float c = cos(uRot4), s = sin(uRot4);
+  return vec4(c * q.x - s * q.w, q.y, q.z, s * q.x + c * q.w);
+}
+
+// Quaternion product, x = real part.
+vec4 qmul(vec4 a, vec4 b) {
+  return vec4(a.x * b.x - dot(a.yzw, b.yzw),
+              a.x * b.yzw + b.x * a.yzw + cross(a.yzw, b.yzw));
+}
+
+// Quaternion z^2 + c with derivative dz' = 2 z dz (+1 for the Mandelbrot set).
+float quatDE(vec4 p, out float trap) {
+  vec4 z = p;
+  vec4 dz = vec4(1.0, 0.0, 0.0, 0.0);
+  vec4 c = uJulia == 1 ? uC : p;
+  float k = uJulia == 1 ? 0.0 : 1.0;
+  float r2 = dot(z, z);
+  trap = 1e10;
+  for (int i = 0; i < 15; i++) {
+    if (i >= uIter) break;
+    dz = 2.0 * qmul(z, dz) + vec4(k, 0.0, 0.0, 0.0);
+    z = qmul(z, z) + c;
+    r2 = dot(z, z);
+    trap = min(trap, sqrt(r2));
+    if (r2 > BAILOUT * BAILOUT) break;
+  }
+  float r = max(sqrt(r2), 1e-6);
+  return 0.5 * r * log(r) / length(dz);
+}
+
+vec2 cpow(vec2 z, float n) {
+  float a = atan(z.y, z.x) * n;
+  return pow(length(z), n) * vec2(cos(a), sin(a));
+}
+
+// Bicomplex z^n + c. With z = (a + bi) + (c + di)j, the idempotent basis splits it
+// into two independent complex numbers u = (a+d, b-c), v = (a-d, b+c) that multiply
+// component-wise. The set is "u in M and v in M", so the distance is roughly the
+// larger of the two complex distances (scaled by 1/sqrt2 for the basis change).
+float bicomplexDE(vec4 p, out float trap) {
+  vec2 u = vec2(p.x + p.w, p.y - p.z);
+  vec2 v = vec2(p.x - p.w, p.y + p.z);
+  vec2 cu = u, cv = v;
+  if (uJulia == 1) {
+    cu = vec2(uC.x + uC.w, uC.y - uC.z);
+    cv = vec2(uC.x - uC.w, uC.y + uC.z);
+  }
+  float k = uJulia == 1 ? 0.0 : 1.0;
+  float ru = length(u), rv = length(v);
+  float dru = 1.0, drv = 1.0;
+  bool eu = false, ev = false;   // escaped flags; an escaped half stops iterating
+  trap = 1e10;
+  for (int i = 0; i < 15; i++) {
+    if (i >= uIter) break;
+    if (!eu) {
+      dru = uPower * pow(ru, uPower - 1.0) * dru + k;
+      u = cpow(u, uPower) + cu;
+      ru = length(u);
+      eu = ru > BAILOUT;
+    }
+    if (!ev) {
+      drv = uPower * pow(rv, uPower - 1.0) * drv + k;
+      v = cpow(v, uPower) + cv;
+      rv = length(v);
+      ev = rv > BAILOUT;
+    }
+    trap = min(trap, length(vec2(ru, rv)) * 0.7071);
+    if (eu && ev) break;
+  }
+  float du = eu ? 0.5 * log(ru) * ru / dru : 0.0;
+  float dv = ev ? 0.5 * log(rv) * rv / drv : 0.0;
+  return max(du, dv) * 0.7071;
+}
+
+float DE(vec3 p, out float trap) {
+  if (uFormula == 1) return quatDE(to4D(p), trap);
+  if (uFormula == 2) return bicomplexDE(to4D(p), trap);
+  if (uFormula >= 3 && uFormula <= 5) return polyDE(p, trap);
+  return bulbDE(p, trap);
+}
+
+float map(vec3 p) { float t; return DE(p, t); }
+
+vec3 calcNormal(vec3 p, float e) {
+  vec2 k = vec2(1.0, -1.0);
+  return normalize(k.xyy * map(p + k.xyy * e) +
+                   k.yyx * map(p + k.yyx * e) +
+                   k.yxy * map(p + k.yxy * e) +
+                   k.xxx * map(p + k.xxx * e));
+}
+
+// Cosine palettes (Inigo Quilez): a + b * cos(2pi * (c*t + d))
+vec3 palette(float t) {
+  vec3 a = vec3(0.5), b = vec3(0.5), c = vec3(1.0), d = vec3(0.0, 0.33, 0.67); // 0 rainbow
+  if (uPalette == 1) { c = vec3(1.0, 0.7, 0.4); d = vec3(0.0, 0.15, 0.2); }    // sunset
+  else if (uPalette == 2) { a = vec3(0.2, 0.4, 0.6); b = vec3(0.3, 0.3, 0.4); d = vec3(0.0, 0.1, 0.2); } // ocean
+  else if (uPalette == 3) { c = vec3(2.0, 1.0, 0.0); d = vec3(0.5, 0.2, 0.25); } // neon
+  else if (uPalette == 4) { a = vec3(0.6); b = vec3(0.4); d = vec3(0.0); }      // mono
+  return a + b * cos(6.28318 * (c * t + d));
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+
+  // Look-at camera aimed at the origin
+  vec3 ro = uCamPos;
+  vec3 fw = normalize(-ro);
+  vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(fw * 1.5 + uv.x * rt + uv.y * up);
+
+  float t = 0.0;
+  float tMax = length(ro) + 4.0;
+  float pixel = 1.0 / uRes.y;
+  float steps = 0.0;
+  float eps = 0.0;
+  bool hit = false;
+  float trap;
+
+  for (int i = 0; i < MAX_STEPS; i++) {
+    float d = DE(ro + rd * t, trap);
+    eps = pixel * t * 0.5;
+    if (d < eps) { hit = true; break; }
+    t += d;
+    steps += 1.0;
+    if (t > tMax) break;
+  }
+
+  vec3 col = mix(vec3(0.02, 0.02, 0.05), vec3(0.07, 0.05, 0.13), uv.y + 0.5);
+
+  if (hit) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcNormal(p, max(eps, 1e-5));
+    vec3 base = palette(trap * 1.2 + 0.2);
+    vec3 L = normalize(vec3(0.6, 0.8, 0.5));
+    float dif = max(dot(n, L), 0.0);
+    float amb = 0.5 + 0.5 * n.y;
+    float spe = pow(max(dot(reflect(-L, n), -rd), 0.0), 32.0);
+    float ao = clamp(1.0 - steps * 0.012, 0.15, 1.0);   // step-count ambient occlusion
+    col = base * (0.25 * amb + 0.9 * dif) * ao + 0.35 * spe * ao;
+  }
+
+  // Glow: rays that pass close to the surface take many steps
+  float g = steps / float(MAX_STEPS);
+  col += uGlow * palette(0.65) * g * g * 3.0;
+
+  gl_FragColor = vec4(pow(clamp(col, 0.0, 1.0), vec3(0.4545)), 1.0);
+}`;
+
+// ---------- Sketch ----------
+let pg, sh, ui = {};
+let yaw, pitch, dist;
+let dragging = false;
+let animPhase = 0, rotPhase = 0;
+let slowFrames = 0;     // run of slow frames; negative = grace period after a rebuild
+let glLost = false;
+
+const LOST_MSG = 'The graphics card reset because a frame took too long to draw. ' +
+  'Recover restarts the renderer at a lower quality.';
+const BLOCKED_MSG = 'Your browser has turned off WebGL for this page, usually after a graphics reset. ' +
+  'If the browser shows a warning bar with a Reload button, click it. Otherwise close and reopen ' +
+  'the browser, then open index.html again.';
+
+// [shader id, menu label], in menu order
+const FORMULAS = [
+  [0, 'Mandelbulb'], [6, 'Spherical (p, q)'], [3, 'Cubic'], [4, 'Quintic'],
+  [5, 'Power-nine'], [1, 'Quaternion'], [2, 'Bicomplex']
+];
+
+// Known-good starting points per formula. Unlisted values come from DEFAULTS.
+const DEFAULTS = { power: 8, iter: 10, theta: 0, phi: 0, p: 8, q: 8, w: 0, rot4: 0, julia: false, c: [-0.29, -0.4, 0.34, 0.44] };
+const PRESETS = {
+  0: [{ name: 'Classic (n = 8)' }, { name: 'Three lobes (n = 3)', power: 3 }, { name: 'Twisted', theta: 1.0, phi: 0.5 }],
+  6: [{ name: 'p = 4, q = 8', p: 4 }, { name: 'p = 8, q = 4', q: 4 }],
+  3: [{ name: 'Cubic' }],
+  4: [{ name: 'Quintic (-z^5)' }],
+  5: [{ name: 'Power-nine', iter: 8 }],
+  1: [
+    { name: 'Julia', julia: true },
+    { name: 'Julia: basilica', julia: true, c: [-1, 0.2, 0, 0] },
+    { name: 'Mandelbrot (spun)', julia: false }
+  ],
+  2: [
+    { name: 'Tetrabrot', power: 2 },
+    { name: 'Rabbit x rabbit (Julia)', power: 2, julia: true, c: [-0.12, 0.75, 0, 0] },
+    { name: 'Tilted 4D slice', power: 2, rot4: 0.8 }
+  ]
+};
+
+function setup() {
+  pixelDensity(1);
+  // The fractal renders in a WEBGL graphics buffer (makeBuffer). The visible canvas is 2D,
+  // so after a GPU reset only that buffer needs rebuilding.
+  const c = createCanvas(windowWidth, windowHeight);
+  c.mousePressed(() => { dragging = true; });
+  c.elt.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    dist = constrain(dist * Math.exp(e.deltaY * 0.001), 1.2, 10);
+  }, { passive: false });
+  ui.overlay = createDiv('').id('overlay');
+  buildUI();
+  makeBuffer();
+}
+
+// Render target at a fraction of the window size (quality slider).
+function makeBuffer() {
+  if (pg) {
+    try { pg.remove(); } catch (e) { /* context may already be gone */ }
+    pg = null;
+  }
+  const s = ui.quality.slider.value();
+  try {
+    pg = createGraphics(max(1, floor(width * s)), max(1, floor(height * s)), WEBGL);
+    pg.pixelDensity(1);
+    pg.noStroke();
+    sh = pg.createShader(vert, frag);
+  } catch (e) {
+    pg = null;
+    showOverlay(BLOCKED_MSG);
+    return;
+  }
+  const buffer = pg;
+  pg.elt.addEventListener('webglcontextlost', () => {
+    if (pg !== buffer) return;          // an old buffer being cleaned up
+    glLost = true;
+    showOverlay(LOST_MSG, 'Recover', recover);
+  });
+  slowFrames = -10;                     // the first frames include shader compilation
+}
+
+function recover() {
+  glLost = false;
+  ui.overlay.style('display', 'none');
+  ui.quality.slider.value(max(0.25, ui.quality.slider.value() / 2));
+  makeBuffer();
+}
+
+function showOverlay(msg, buttonLabel, onClick) {
+  ui.overlay.html('');
+  const box = createDiv('').parent(ui.overlay);
+  createP(msg).parent(box);
+  if (buttonLabel) createButton(buttonLabel).parent(box).mousePressed(onClick);
+  ui.overlay.style('display', 'flex');
+}
+
+// If frames stay slow, lower Quality before the driver's GPU timeout (about 2 s on Windows) resets the card.
+function guardFrameTime() {
+  if (deltaTime > 150) slowFrames++;
+  else if (slowFrames > 0) slowFrames--;
+  else if (slowFrames < 0) slowFrames++;
+  const q = ui.quality.slider.value();
+  if (slowFrames >= 5 && q > 0.25) {
+    ui.quality.slider.value(max(0.25, q - 0.1));
+    makeBuffer();
+    ui.note.html('Frames were slow, so Quality was lowered to ' + nf(ui.quality.slider.value(), 1, 2) + '.');
+  }
+}
+
+function addSlider(label, min, max, value, step, digits) {
+  const box = createDiv().parent(ui.panel);
+  const row = createElement('label', label).parent(box);
+  const val = createSpan('').parent(row);
+  const slider = createSlider(min, max, value, step).parent(box);
+  return { box, slider, val, digits };
+}
+
+function buildUI() {
+  ui.panel = createDiv('<h1>Mandelbulb</h1>').id('panel');
+  createElement('label', 'Formula').parent(ui.panel);
+  ui.formula = createSelect().parent(ui.panel);
+  FORMULAS.forEach(([id, name]) => ui.formula.option(name, id));
+  ui.formula.changed(onFormulaChange);
+  createElement('label', 'Preset').parent(ui.panel);
+  ui.preset  = createSelect().parent(ui.panel);
+  ui.preset.changed(applyPreset);
+  ui.reset   = createButton('Reset to preset').parent(ui.panel);
+  ui.reset.mousePressed(applyPreset);
+  ui.power   = addSlider('Power n', 1, 16, 8, 0.01, 2);
+  ui.iter    = addSlider('Iterations', 2, 15, 10, 1, 0);
+  ui.theta   = addSlider('Theta offset', 0, TWO_PI, 0, 0.01, 2);
+  ui.phi     = addSlider('Phi offset', 0, TWO_PI, 0, 0.01, 2);
+  ui.p       = addSlider('Theta multiplier p', 1, 16, 8, 0.01, 2);
+  ui.q       = addSlider('Phi multiplier q', 1, 16, 8, 0.01, 2);
+  ui.w       = addSlider('4D slice w', -1.5, 1.5, 0, 0.01, 2);
+  ui.rot4    = addSlider('4D rotation (x-w)', 0, TWO_PI, 0, 0.01, 2);
+  ui.animRot = createCheckbox(' Animate 4D rotation', false).parent(ui.panel);
+  ui.julia   = createCheckbox(' Julia set', false).parent(ui.panel);
+  ui.julia.changed(updateVisibility);
+  ui.cx      = addSlider('c.x', -1, 1, -0.29, 0.01, 2);
+  ui.cy      = addSlider('c.y', -1, 1, -0.4, 0.01, 2);
+  ui.cz      = addSlider('c.z', -1, 1, 0.34, 0.01, 2);
+  ui.cw      = addSlider('c.w', -1, 1, 0.44, 0.01, 2);
+  ui.animate = createCheckbox(' Animate power', false).parent(ui.panel);
+  ui.speed   = addSlider('Anim speed', 0, 2, 0.4, 0.01, 2);
+  createElement('label', 'Palette').parent(ui.panel);
+  ui.palette = createSelect().parent(ui.panel);
+  ['Rainbow', 'Sunset', 'Ocean', 'Neon', 'Mono'].forEach((p, i) => ui.palette.option(p, i));
+  ui.glow    = addSlider('Glow', 0, 2, 0.6, 0.01, 2);
+  ui.quality = addSlider('Quality (res scale)', 0.25, 1, 0.5, 0.05, 2);
+  ui.quality.slider.changed(makeBuffer);
+  ui.note    = createDiv('').class('note').parent(ui.panel);
+  createDiv('Drag to orbit · scroll to zoom · H hides panel').class('hint').parent(ui.panel);
+  onFormulaChange();
+}
+
+function formula() { return int(ui.formula.value()); }
+function hasPower() { return [0, 2, 6].includes(formula()); }   // the others have a fixed power
+function is4D() { return [1, 2].includes(formula()); }
+
+function onFormulaChange() {
+  ui.preset.elt.innerHTML = '';
+  PRESETS[formula()].forEach((p, i) => ui.preset.option(p.name, i));
+  applyPreset();
+}
+
+// Put every shape slider, the camera and the animations back to the chosen preset.
+// Palette, glow, quality and animation speed are left alone.
+function applyPreset() {
+  const p = { ...DEFAULTS, ...PRESETS[formula()][int(ui.preset.value())] };
+  for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4']) ui[k].slider.value(p[k]);
+  ['cx', 'cy', 'cz', 'cw'].forEach((k, i) => ui[k].slider.value(p.c[i]));
+  ui.julia.checked(p.julia);
+  ui.animate.checked(false);
+  ui.animRot.checked(false);
+  animPhase = rotPhase = 0;
+  yaw = 0.6; pitch = 0.35; dist = 4.5;
+  updateVisibility();
+}
+
+// Show only the controls the current formula uses.
+function updateVisibility() {
+  const f = formula();
+  const show = (el, on) => (on ? el.show() : el.hide());
+  show(ui.power.box, hasPower());
+  show(ui.animate, hasPower());
+  show(ui.theta.box, f === 0 || f === 6);
+  show(ui.phi.box, f === 0 || f === 6);
+  show(ui.p.box, f === 6);
+  show(ui.q.box, f === 6);
+  for (const el of [ui.w.box, ui.rot4.box, ui.animRot, ui.julia]) show(el, is4D());
+  for (const k of ['cx', 'cy', 'cz', 'cw']) show(ui[k].box, is4D() && ui.julia.checked());
+}
+
+function currentPower() {
+  const n = ui.power.slider.value();
+  if (!ui.animate.checked() || !hasPower()) return n;
+  return constrain(n + 3 * sin(animPhase), 1, 16);
+}
+
+function draw() {
+  if (!pg || glLost) return;
+  guardFrameTime();
+  if (!pg) return;                      // rebuild failed
+  const step = (deltaTime / 1000) * ui.speed.slider.value() * TWO_PI;
+  if (ui.animate.checked()) animPhase += step;
+  if (ui.animRot.checked()) rotPhase += step * 0.25;
+
+  const power = currentPower();
+  const rot4 = (ui.rot4.slider.value() + rotPhase) % TWO_PI;
+  for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
+    const v = k === 'power' ? power : k === 'rot4' ? rot4 : ui[k].slider.value();
+    ui[k].val.html(nf(v, 1, ui[k].digits));
+  }
+
+  const cam = [
+    dist * cos(pitch) * sin(yaw),
+    dist * sin(pitch),
+    dist * cos(pitch) * cos(yaw)
+  ];
+
+  pg.shader(sh);
+  sh.setUniform('uRes', [pg.width, pg.height]);
+  sh.setUniform('uCamPos', cam);
+  sh.setUniform('uPower', power);
+  sh.setUniform('uP', formula() === 6 ? ui.p.slider.value() : power);
+  sh.setUniform('uQ', formula() === 6 ? ui.q.slider.value() : power);
+  sh.setUniform('uIter', ui.iter.slider.value());
+  sh.setUniform('uThetaOff', ui.theta.slider.value());
+  sh.setUniform('uPhiOff', ui.phi.slider.value());
+  sh.setUniform('uGlow', ui.glow.slider.value());
+  sh.setUniform('uPalette', int(ui.palette.value()));
+  sh.setUniform('uFormula', formula());
+  sh.setUniform('uJulia', ui.julia.checked() ? 1 : 0);
+  sh.setUniform('uC', [ui.cx.slider.value(), ui.cy.slider.value(), ui.cz.slider.value(), ui.cw.slider.value()]);
+  sh.setUniform('uW', ui.w.slider.value());
+  sh.setUniform('uRot4', rot4);
+  pg.rect(0, 0, pg.width, pg.height);
+
+  image(pg, 0, 0, width, height);
+}
+
+function mouseDragged() {
+  if (!dragging) return;
+  yaw -= movedX * 0.01;
+  pitch = constrain(pitch + movedY * 0.01, -1.5, 1.5);
+}
+
+function mouseReleased() { dragging = false; }
+
+function keyPressed() {
+  if (key === 'h' || key === 'H') ui.panel.style('display', ui.panel.style('display') === 'none' ? 'block' : 'none');
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  makeBuffer();
+}
+</script>
+</body>
+</html>
