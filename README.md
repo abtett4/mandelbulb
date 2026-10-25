@@ -10,7 +10,7 @@ Live version: https://abtett4.github.io/mandelbulb/
 
 - **Drag** to orbit, **scroll** to zoom, **H** to hide the panel.
 - The panel groups its controls into **Parameters**, **Animation** and **Graphics** sections. Click a heading (or focus it and press Enter) to open or close it.
-- **Formula** picks the fractal. **Preset** loads a known-good starting point for it, and **Reset to preset** returns there if you get lost.
+- **Formula** picks the fractal, and the formula's equation appears under it. Symbols in blue match a slider (for example **n** is Power), and they light up while you hover over or focus that slider. **Preset** loads a known-good starting point for it, and **Reset to preset** returns there if you get lost.
 - **Power n**, **Iterations**, **Theta/Phi offset** and the 4D sliders change the shape. For Julia sets, **Animate c** morphs the shape by moving c along the edge of the Mandelbrot set.
 - **Palette**, **Glow** and **Coloring** change the look. **Orbit stripes** colors by how close each point's orbit comes to the center, and **Curvature** colors creases and ridges. **Soft shadows** adds shadows from the light, at some cost to frame rate.
 - **Quality** sets the render resolution. Lower it if frames are slow.

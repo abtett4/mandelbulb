@@ -12,7 +12,7 @@
   canvas { display: block; cursor: grab; }
   canvas:active { cursor: grabbing; }
   #panel {
-    position: absolute; top: 12px; left: 12px; width: 230px;
+    position: absolute; top: 12px; left: 12px; width: 260px;
     padding: 10px 12px; border-radius: 8px;
     background: rgba(10, 10, 20, 0.75); color: #ddd;
     font: 12px/1.4 system-ui, sans-serif; user-select: none;
@@ -27,6 +27,15 @@
   #panel .actions button { flex: 1; margin-top: 0; }
   #panel .hint { margin-top: 8px; color: #999; font-size: 11px; }
   #panel .note { margin-top: 6px; color: #e8c170; font-size: 11px; }
+  #panel .equation {
+    margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.06);
+    color: #eee; font: 12.5px/1.5 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif;
+  }
+  #panel .equation .line { white-space: nowrap; overflow-x: auto; }   /* keep each equation whole */
+  #panel .equation .eqnote { margin-top: 2px; color: #999; font: 11px/1.4 system-ui, sans-serif; }
+  #panel .sym { color: #8ab4ff; font-family: 'Cambria Math', 'Times New Roman', serif; font-style: italic; }
+  #panel .equation .sym { transition: color 0.15s, text-shadow 0.15s; }
+  #panel .equation .sym.active { color: #fff; text-shadow: 0 0 6px #8ab4ff, 0 0 2px #8ab4ff; }
   /* Collapsible sections: the body tweens between 0fr and 1fr rows, and its contents
      become hidden after closing so keyboard focus skips them. */
   #panel .section { margin-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.12); }
@@ -601,12 +610,61 @@ function addSection(title, open) {
   return sec;
 }
 
-function addSlider(label, min, max, value, step, digits) {
+// sym links the slider to its symbol in the equation (see equationHTML).
+function addSlider(label, min, max, value, step, digits, sym) {
   const box = createDiv().parent(ui.target);
-  const row = createElement('label', label).parent(box);
+  const row = createElement('label', `<span>${label}</span>`).parent(box);   // name left, value right
   const val = createSpan('').parent(row);
   const slider = createSlider(min, max, value, step).parent(box);
+  if (sym) linkSymbol(box.elt, sym);
   return { box, slider, val, digits };
+}
+
+// While a control is hovered or focused, its symbol glows in the equation.
+function linkSymbol(el, sym) {
+  const glow = (on) => document.querySelectorAll(`#panel .equation [data-sym="${sym}"]`)
+    .forEach((s) => s.classList.toggle('active', on));
+  el.addEventListener('pointerenter', () => glow(true));
+  el.addEventListener('pointerleave', () => glow(false));
+  el.addEventListener('focusin', () => glow(true));
+  el.addEventListener('focusout', () => glow(false));
+}
+
+// ---------- Equations ----------
+// Each formula's iteration, written with symbols only. A symbol with a slider is highlighted
+// and carries data-sym so linkSymbol can light it up.
+const S = (sym, text) => `<span class="sym" data-sym="${sym}">${text}</span>`;
+const line = (html) => `<div class="line">${html}</div>`;
+const eqNote = (html) => `<div class="eqnote">${html}</div>`;
+
+function equationHTML(f, julia) {
+  const n = S('power', 'n'), k = S('iter', 'k');
+  const th0 = S('theta', 'θ<sub>0</sub>'), ph0 = S('phi', 'φ<sub>0</sub>');
+  const c = julia ? S('c', 'c') : 'c';
+  const repeat = eqNote(`c is the point being tested · repeated ${k} times`);
+  const slice = eqNote(`3D slice at (x, y, z, ${S('w', 'w')}), turned by ${S('rot4', 'α')} in the x–w plane`);
+  const start = eqNote(julia ? `Julia set: ${c} fixed · repeated ${k} times`
+                             : `c is the point being tested · repeated ${k} times`);
+  const cyclic = eqNote(`y and z: the same with (x, y, z) cycled · repeated ${k} times`);
+  switch (f) {
+    case 6: return line(`v ↦ v<sup>${n}</sup> + c`)
+                 + line(`v<sup>${n}</sup> = r<sup>${n}</sup>⟨sin Θ cos Φ, sin Θ sin Φ, cos Θ⟩`)
+                 + line(`Θ = ${S('p', 'p')}θ + ${th0}, Φ = ${S('q', 'q')}φ + ${ph0}`) + repeat;
+    case 3: return line('x ↦ x³ − 3x(y² + z²) + c<sub>x</sub>')
+                 + line('y ↦ −y³ + 3yx² − yz² + c<sub>y</sub>')
+                 + line('z ↦ z³ − 3zx² + zy² + c<sub>z</sub>') + repeat;
+    case 4: return line('x ↦ −[x⁵ − 10x³(y² + z²)')
+                 + line(`&emsp;+ 5x(y⁴ + ${S('qc', 'C')}y²z² + z⁴)] + c<sub>x</sub>`) + cyclic;
+    case 5: return line('x ↦ ½(x + iρ)⁹ + ½(x − iρ)⁹ + c<sub>x</sub>')
+                 + line('ρ = √(y² + z²)') + cyclic;
+    case 1: return line(`q ↦ q² + ${c}`) + line('q = x + y<b>i</b> + z<b>j</b> + w<b>k</b>') + slice + start;
+    case 2: return line(`z ↦ z<sup>${n}</sup> + ${c}`)
+                 + line('z = z<sub>1</sub> + z<sub>2</sub><b>j</b>, z<sub>1</sub>, z<sub>2</sub> complex, <b>ij</b> = <b>ji</b>')
+                 + slice + start;
+    default: return line(`v ↦ v<sup>${n}</sup> + c`)
+                  + line(`v<sup>${n}</sup> = r<sup>${n}</sup>⟨sin Θ cos Φ, sin Θ sin Φ, cos Θ⟩`)
+                  + line(`Θ = ${n}θ + ${th0}, Φ = ${n}φ + ${ph0}`) + repeat;
+  }
 }
 
 function buildUI() {
@@ -615,6 +673,7 @@ function buildUI() {
   ui.formula = createSelect().parent(ui.panel);
   FORMULAS.forEach(([id, name]) => ui.formula.option(name, id));
   ui.formula.changed(onFormulaChange);
+  ui.equation = createDiv('').class('equation').parent(ui.panel);
   createElement('label', 'Preset').parent(ui.panel);
   ui.preset  = createSelect().parent(ui.panel);
   ui.preset.changed(applyPreset);
@@ -630,21 +689,23 @@ function buildUI() {
   ui.note    = createDiv('').class('note').parent(ui.panel);
 
   addSection('Parameters', true);
-  ui.power   = addSlider('Power n', 1, 16, 8, 0.01, 2);
-  ui.iter    = addSlider('Iterations', 2, 15, 10, 1, 0);
-  ui.theta   = addSlider('Theta offset', 0, TWO_PI, 0, 0.01, 2);
-  ui.phi     = addSlider('Phi offset', 0, TWO_PI, 0, 0.01, 2);
-  ui.p       = addSlider('Theta multiplier p', 1, 16, 8, 0.01, 2);
-  ui.q       = addSlider('Phi multiplier q', 1, 16, 8, 0.01, 2);
-  ui.qc      = addSlider('Quintic C', 0, 2, 0, 0.01, 2);
-  ui.w       = addSlider('4D slice w', -1.5, 1.5, 0, 0.01, 2);
-  ui.rot4    = addSlider('4D rotation (x-w)', 0, TWO_PI, 0, 0.01, 2);
+  const sym = (t) => ` <span class="sym">${t}</span>`;
+  ui.power   = addSlider('Power' + sym('n'), 1, 16, 8, 0.01, 2, 'power');
+  ui.iter    = addSlider('Iterations' + sym('k'), 2, 15, 10, 1, 0, 'iter');
+  ui.theta   = addSlider('Theta offset' + sym('θ<sub>0</sub>'), 0, TWO_PI, 0, 0.01, 2, 'theta');
+  ui.phi     = addSlider('Phi offset' + sym('φ<sub>0</sub>'), 0, TWO_PI, 0, 0.01, 2, 'phi');
+  ui.p       = addSlider('Theta multiplier' + sym('p'), 1, 16, 8, 0.01, 2, 'p');
+  ui.q       = addSlider('Phi multiplier' + sym('q'), 1, 16, 8, 0.01, 2, 'q');
+  ui.qc      = addSlider('Quintic' + sym('C'), 0, 2, 0, 0.01, 2, 'qc');
+  ui.w       = addSlider('4D slice' + sym('w'), -1.5, 1.5, 0, 0.01, 2, 'w');
+  ui.rot4    = addSlider('4D rotation' + sym('α') + ' (x-w)', 0, TWO_PI, 0, 0.01, 2, 'rot4');
   ui.julia   = createCheckbox(' Julia set', false).parent(ui.target);
   ui.julia.changed(updateVisibility);
-  ui.cx      = addSlider('c.x', -1, 1, -0.29, 0.01, 2);
-  ui.cy      = addSlider('c.y', -1, 1, -0.4, 0.01, 2);
-  ui.cz      = addSlider('c.z', -1, 1, 0.34, 0.01, 2);
-  ui.cw      = addSlider('c.w', -1, 1, 0.44, 0.01, 2);
+  linkSymbol(ui.julia.elt, 'c');
+  ui.cx      = addSlider('c.x', -1, 1, -0.29, 0.01, 2, 'c');
+  ui.cy      = addSlider('c.y', -1, 1, -0.4, 0.01, 2, 'c');
+  ui.cz      = addSlider('c.z', -1, 1, 0.34, 0.01, 2, 'c');
+  ui.cw      = addSlider('c.w', -1, 1, 0.44, 0.01, 2, 'c');
 
   ui.animSection = addSection('Animation', false);
   ui.animate = createCheckbox(' Animate power', false).parent(ui.target);
@@ -709,6 +770,7 @@ function updateVisibility() {
   for (const el of [ui.cx.box, ui.cy.box, ui.cz.box, ui.cw.box, ui.animC]) show(el, is4D() && ui.julia.checked());
   // Cubic, quintic and power-nine have nothing to animate, so the whole section goes.
   show(ui.animSection, hasPower() || is4D());
+  ui.equation.html(equationHTML(f, is4D() && ui.julia.checked()));
 }
 
 function currentPower() {
