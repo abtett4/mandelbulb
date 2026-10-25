@@ -18,7 +18,9 @@
     font: 12px/1.4 system-ui, sans-serif; user-select: none;
     max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box;
   }
-  #panel h1 { font-size: 14px; margin: 0 0 6px; color: #fff; }
+  #panel h1 { font-size: 14px; margin: 0 0 4px; color: #fff; }
+  #panel .definition { margin: 0 0 6px; color: #aaa; font-size: 11px; line-height: 1.45; }
+  #panel .nowrap { white-space: nowrap; }
   #panel label { display: flex; justify-content: space-between; margin-top: 6px; }
   #panel label:has(input[type=checkbox]) { justify-content: flex-start; gap: 4px; }
   #panel input[type=range], #panel select { width: 100%; margin: 2px 0 0; }
@@ -670,11 +672,13 @@ function equationHTML(f, julia) {
 
 function buildUI() {
   ui.panel = createDiv('<h1>Mandelbulb</h1>').id('panel');
+  createP('A 3D fractal: the points c whose orbit under <span class="nowrap">v ↦ v<sup>n</sup> + c</span> stays bounded. ' +
+          'It extends the Mandelbrot set to three dimensions using spherical coordinates.')
+    .class('definition').parent(ui.panel);
   createElement('label', 'Formula').parent(ui.panel);
   ui.formula = createSelect().parent(ui.panel);
   FORMULAS.forEach(([id, name]) => ui.formula.option(name, id));
   ui.formula.changed(onFormulaChange);
-  ui.equation = createDiv('').class('equation').parent(ui.panel);
   createElement('label', 'Preset').parent(ui.panel);
   ui.preset  = createSelect().parent(ui.panel);
   ui.preset.changed(applyPreset);
@@ -689,7 +693,8 @@ function buildUI() {
   ui.tour.mousePressed(startTour);
   ui.note    = createDiv('').class('note').parent(ui.panel);
 
-  addSection('Parameters', true);
+  addSection('Parameters', false);
+  ui.equation = createDiv('').class('equation').parent(ui.target);
   const sym = (t) => ` <span class="sym">${t}</span>`;
   ui.power   = addSlider('Power' + sym('n'), 1, 16, 8, 0.01, 2, 'power');
   ui.iter    = addSlider('Iterations' + sym('k'), 2, 15, 10, 1, 0, 'iter');
