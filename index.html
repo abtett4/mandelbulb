@@ -459,6 +459,8 @@ function buildUI() {
   const actions = createDiv('').class('actions').parent(ui.panel);
   ui.copyLink = createButton('Copy link').parent(actions);
   ui.copyLink.mousePressed(copyLink);
+  ui.savePng = createButton('Save PNG').parent(actions);
+  ui.savePng.mousePressed(savePNG);
   ui.note    = createDiv('').class('note').parent(ui.panel);
   createDiv('Drag to orbit · scroll to zoom · H hides panel').class('hint').parent(ui.panel);
   onFormulaChange();
@@ -591,13 +593,21 @@ function draw() {
   if (ui.animate.checked()) animPhase += step;
   if (ui.animRot.checked()) rotPhase += step * 0.25;
 
-  const power = currentPower();
-  const rot4 = (ui.rot4.slider.value() + rotPhase) % TWO_PI;
   for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
-    const v = k === 'power' ? power : k === 'rot4' ? rot4 : ui[k].slider.value();
+    const v = k === 'power' ? currentPower() : k === 'rot4' ? currentRot4() : ui[k].slider.value();
     ui[k].val.html(nf(v, 1, ui[k].digits));
   }
 
+  renderFractal();
+  image(pg, 0, 0, width, height);
+  writeStateToURL();
+}
+
+function currentRot4() { return (ui.rot4.slider.value() + rotPhase) % TWO_PI; }
+
+// Draw one frame of the fractal into the WEBGL buffer.
+function renderFractal() {
+  const power = currentPower();
   const cam = [
     dist * cos(pitch) * sin(yaw),
     dist * sin(pitch),
@@ -619,11 +629,23 @@ function draw() {
   sh.setUniform('uJulia', ui.julia.checked() ? 1 : 0);
   sh.setUniform('uC', [ui.cx.slider.value(), ui.cy.slider.value(), ui.cz.slider.value(), ui.cw.slider.value()]);
   sh.setUniform('uW', ui.w.slider.value());
-  sh.setUniform('uRot4', rot4);
+  sh.setUniform('uRot4', currentRot4());
   pg.rect(0, 0, pg.width, pg.height);
+}
 
-  image(pg, 0, 0, width, height);
-  writeStateToURL();
+// Render one frame at full window resolution and save it, then go back to the chosen Quality.
+function savePNG() {
+  const q = ui.quality.slider.value();
+  ui.quality.slider.value(1);
+  makeBuffer();
+  if (pg) {
+    renderFractal();
+    const name = FORMULAS.find(([id]) => id === formula())[1]
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '');
+    saveCanvas(pg, 'mandelbulb-' + name, 'png');
+  }
+  ui.quality.slider.value(q);
+  makeBuffer();
 }
 
 function mouseDragged() {
