@@ -22,6 +22,8 @@
   #panel .definition { margin: 0 0 6px; color: #aaa; font-size: 11px; line-height: 1.45; }
   #panel .nowrap { white-space: nowrap; }
   #panel .explain { margin-top: 3px; color: #aaa; font-size: 11px; line-height: 1.45; }
+  #panel:not(.explaining) .definition, #panel:not(.explaining) .explain { display: none; }
+  #panel .explain-toggle { margin: 0 0 6px; }
   #panel label { display: flex; justify-content: space-between; margin-top: 6px; }
   #panel label:has(input[type=checkbox]) { justify-content: flex-start; gap: 4px; }
   #panel input[type=range], #panel select { width: 100%; margin: 2px 0 0; }
@@ -721,6 +723,14 @@ function equationHTML(f, julia) {
 
 function buildUI() {
   ui.panel = createDiv('<h1>Mandelbulb</h1>').id('panel');
+  // Hides or shows the definition and the formula and preset explanations (CSS: #panel.explaining).
+  ui.explainBtn = createButton('Explain the math').class('explain-toggle').parent(ui.panel);
+  ui.explainBtn.attribute('aria-pressed', 'false');
+  ui.explainBtn.elt.addEventListener('click', () => {
+    const on = ui.panel.elt.classList.toggle('explaining');
+    ui.explainBtn.attribute('aria-pressed', String(on));
+    ui.explainBtn.html(on ? 'Hide the explanations' : 'Explain the math');
+  });
   createP('A 3D fractal: the points c whose orbit under <span class="nowrap">v ↦ v<sup>n</sup> + c</span> stays bounded. ' +
           'It extends the Mandelbrot set to three dimensions using spherical coordinates.')
     .class('definition').parent(ui.panel);
