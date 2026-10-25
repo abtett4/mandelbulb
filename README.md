@@ -16,7 +16,7 @@ Live version: https://abtett4.github.io/mandelbulb/
 - **Quality** sets the render resolution. Lower it if frames are slow.
 - **Copy link** copies a link to the current view. The address bar always holds it too, so any view can be bookmarked or put in slides.
 - **Save PNG** saves the current view at full window resolution.
-- **Tour** (or **T**) hides the panel and slowly orbits through every preset, cross-fading between them. Any click or key stops it.
+- **Tour** (or **T**) hides the panel and slowly orbits through every preset, cross-fading between them. A bar at the bottom shows the current stop and the time until the next one. **Space** or a click pauses and resumes, and **Esc** or **Exit** ends the tour.
 
 ## Formulas
 

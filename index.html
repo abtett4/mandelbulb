@@ -45,6 +45,18 @@
   @media (prefers-reduced-motion: reduce) {
     #panel .section-body, #panel .section-head::after { transition: none; }
   }
+  #tourbar {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: none; align-items: center; gap: 10px;
+    width: 420px; max-width: calc(100vw - 32px); box-sizing: border-box;
+    padding: 8px 12px; border-radius: 8px;
+    background: rgba(10, 10, 20, 0.75); color: #ddd; font: 12px/1.4 system-ui, sans-serif;
+  }
+  #tourbar .info { flex: 1; min-width: 0; }
+  #tourbar .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tourbar .track { height: 3px; margin-top: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.15); }
+  #tourbar .fill { width: 0; height: 100%; border-radius: 2px; background: #8ab4ff; }
+  #tourbar .time { width: 64px; color: #999; font-size: 11px; font-variant-numeric: tabular-nums; }
   #overlay {
     position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
     background: rgba(0, 0, 0, 0.8); color: #eee; font: 14px/1.5 system-ui, sans-serif;
@@ -467,11 +479,11 @@ function setup() {
   c.mousePressed(() => { dragging = true; });
   c.elt.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (touring) stopTour();
     dist = constrain(dist * Math.exp(e.deltaY * 0.001), 1.2, 10);
   }, { passive: false });
   ui.overlay = createDiv('').id('overlay');
   buildUI();
+  buildTourBar();
   if (location.hash.length > 1) setState(location.hash.slice(1));
   window.addEventListener('hashchange', () => setState(location.hash.slice(1)));
   makeBuffer();
@@ -639,7 +651,7 @@ function buildUI() {
   ui.quality.slider.changed(makeBuffer);
   ui.shadows = createCheckbox(' Soft shadows (slower)', false).parent(ui.target);
 
-  createDiv('Drag to orbit · scroll to zoom · H hides panel · T starts a tour (any key or click stops it)').class('hint').parent(ui.panel);
+  createDiv('Drag to orbit · scroll to zoom · H hides panel · T starts a tour (Space or click pauses, Esc exits)').class('hint').parent(ui.panel);
   onFormulaChange();
 }
 
@@ -777,7 +789,8 @@ function draw() {
   if (!pg || glLost) return;
   guardFrameTime();
   if (!pg) return;                      // rebuild failed
-  const step = (deltaTime / 1000) * ui.speed.slider.value() * TWO_PI;
+  const paused = touring && tourPaused;
+  const step = paused ? 0 : (deltaTime / 1000) * ui.speed.slider.value() * TWO_PI;
   if (ui.animate.checked()) animPhase += step;
   if (ui.animRot.checked()) rotPhase += step * 0.25;
   if (ui.animC.checked()) cPhase += step * 0.15;
@@ -799,31 +812,53 @@ function draw() {
 
 // ---------- Tour ----------
 // Visits every preset in menu order, orbiting the camera and cross-fading between stops.
+// Space or a click pauses; Esc or the Exit button ends it. Time only counts while playing.
 const TOUR_STOP_MS = 12000;
 const TOUR_FADE_MS = 1500;
 const TOUR = FORMULAS.flatMap(([id]) => PRESETS[id].map((_, i) => [id, i]));
-let touring = false, tourIndex = 0, tourStopAt = 0, tourStartedAt = 0;
-let fadeImg = null, fadeStart = 0;
+let touring = false, tourPaused = false, tourIndex = 0, tourElapsed = 0, tourStartedAt = 0;
+let fadeImg = null;
+
+function buildTourBar() {
+  ui.tourBar = createDiv('').id('tourbar');
+  const info = createDiv('').class('info').parent(ui.tourBar);
+  ui.tourLabel = createDiv('').class('label').parent(info);
+  const track = createDiv('').class('track').parent(info);
+  ui.tourFill = createDiv('').class('fill').parent(track);
+  ui.tourTime = createDiv('').class('time').parent(ui.tourBar);
+  ui.tourPause = createButton('Pause').parent(ui.tourBar);
+  ui.tourPause.elt.addEventListener('click', toggleTourPause);
+  createButton('Exit').parent(ui.tourBar).elt.addEventListener('click', stopTour);
+}
 
 function startTour() {
   touring = true;
+  tourPaused = false;
+  ui.tourPause.html('Pause');
   tourStartedAt = millis();
   tourIndex = 0;
+  if (document.activeElement) document.activeElement.blur();   // so Space can't press the Tour button again
   ui.panel.hide();
+  ui.tourBar.style('display', 'flex');
   goToTourStop(false);
 }
 
 function stopTour() {
   touring = false;
+  tourPaused = false;
   fadeImg = null;
+  ui.tourBar.hide();
   ui.panel.show();
 }
 
+function toggleTourPause() {
+  tourPaused = !tourPaused;
+  ui.tourPause.html(tourPaused ? 'Play' : 'Pause');
+}
+
 function goToTourStop(fade) {
-  if (fade) {
-    fadeImg = get();                    // snapshot of the last frame to fade out over the new one
-    fadeStart = millis();
-  }
+  fadeImg = fade ? get() : null;        // snapshot of the last frame to fade out over the new one
+  tourElapsed = 0;
   const [f, i] = TOUR[tourIndex];
   ui.formula.selected(String(f));
   onFormulaChange();
@@ -832,20 +867,27 @@ function goToTourStop(fade) {
   if (is4D() && ui.julia.checked()) ui.animC.checked(true);
   else if (is4D()) ui.animRot.checked(true);
   else if (hasPower()) ui.animate.checked(true);
-  tourStopAt = millis();
 }
 
 function updateTour() {
-  yaw += deltaTime * 0.00015;           // slow orbit, about 0.15 rad per second
-  if (millis() - tourStopAt > TOUR_STOP_MS) {
-    tourIndex = (tourIndex + 1) % TOUR.length;
-    goToTourStop(true);
+  if (!tourPaused) {
+    yaw += deltaTime * 0.00015;         // slow orbit, about 0.15 rad per second
+    tourElapsed += deltaTime;
+    if (tourElapsed > TOUR_STOP_MS) {
+      tourIndex = (tourIndex + 1) % TOUR.length;
+      goToTourStop(true);
+    }
   }
+  const [f, i] = TOUR[tourIndex];
+  const formulaName = FORMULAS.find(([id]) => id === f)[1];
+  ui.tourLabel.html(`${formulaName} · ${PRESETS[f][i].name} · ${tourIndex + 1} of ${TOUR.length}`);
+  ui.tourTime.html(tourPaused ? 'Paused' : 'next in ' + ceil((TOUR_STOP_MS - tourElapsed) / 1000) + ' s');
+  ui.tourFill.style('width', (100 * tourElapsed / TOUR_STOP_MS).toFixed(1) + '%');
 }
 
 function drawFade() {
   if (!fadeImg) return;
-  const t = (millis() - fadeStart) / TOUR_FADE_MS;
+  const t = tourElapsed / TOUR_FADE_MS;  // tied to tour time, so it freezes on pause too
   if (t >= 1) {
     fadeImg = null;
     return;
@@ -926,15 +968,19 @@ function mouseDragged() {
 
 function mouseReleased() { dragging = false; }
 
-function mousePressed() {
-  // Ignore the click on the Tour button that started it.
-  if (touring && millis() - tourStartedAt > 300) stopTour();
+function mousePressed(event) {
+  // A click pauses or resumes the tour. Ignore the click on the Tour button that started it,
+  // and clicks on the tour bar's own buttons.
+  if (!touring || millis() - tourStartedAt < 300) return;
+  if (event && event.target.closest && event.target.closest('#tourbar')) return;
+  toggleTourPause();
 }
 
 function keyPressed() {
   if (touring) {
-    stopTour();
-    return;
+    if (key === ' ') toggleTourPause();
+    else if (keyCode === ESCAPE) stopTour();
+    return false;                       // other keys do nothing during a tour
   }
   if (key === 'h' || key === 'H') ui.panel.style('display', ui.panel.style('display') === 'none' ? 'block' : 'none');
   if (key === 't' || key === 'T') startTour();
