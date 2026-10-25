@@ -23,6 +23,8 @@
   #panel label:has(input[type=checkbox]) { justify-content: flex-start; gap: 4px; }
   #panel input[type=range], #panel select { width: 100%; margin: 2px 0 0; }
   #panel button { width: 100%; margin-top: 6px; }
+  #panel .actions { display: flex; gap: 4px; margin-top: 8px; }
+  #panel .actions button { flex: 1; margin-top: 0; }
   #panel .hint { margin-top: 8px; color: #999; font-size: 11px; }
   #panel .note { margin-top: 6px; color: #e8c170; font-size: 11px; }
   #overlay {
@@ -353,6 +355,8 @@ function setup() {
   }, { passive: false });
   ui.overlay = createDiv('').id('overlay');
   buildUI();
+  if (location.hash.length > 1) setState(location.hash.slice(1));
+  window.addEventListener('hashchange', () => setState(location.hash.slice(1)));
   makeBuffer();
 }
 
@@ -452,6 +456,9 @@ function buildUI() {
   ui.glow    = addSlider('Glow', 0, 2, 0.6, 0.01, 2);
   ui.quality = addSlider('Quality (res scale)', 0.25, 1, 0.5, 0.05, 2);
   ui.quality.slider.changed(makeBuffer);
+  const actions = createDiv('').class('actions').parent(ui.panel);
+  ui.copyLink = createButton('Copy link').parent(actions);
+  ui.copyLink.mousePressed(copyLink);
   ui.note    = createDiv('').class('note').parent(ui.panel);
   createDiv('Drag to orbit · scroll to zoom · H hides panel').class('hint').parent(ui.panel);
   onFormulaChange();
@@ -501,6 +508,81 @@ function currentPower() {
   return constrain(n + 3 * sin(animPhase), 1, 16);
 }
 
+// ---------- Shareable links ----------
+// The view lives in the URL after '#', e.g. #f=0&preset=0&power=8&...&yaw=0.6
+// Quality is left out so a link never forces a heavy setting on a slower machine.
+const STATE_SLIDERS = ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow'];
+let lastStateWrite = 0;
+
+function getState() {
+  const s = new URLSearchParams();
+  s.set('f', formula());
+  s.set('preset', ui.preset.value());
+  for (const k of STATE_SLIDERS) s.set(k, +ui[k].slider.value().toFixed(3));
+  s.set('julia', ui.julia.checked() ? 1 : 0);
+  s.set('anim', ui.animate.checked() ? 1 : 0);
+  s.set('animRot', ui.animRot.checked() ? 1 : 0);
+  s.set('pal', ui.palette.value());
+  s.set('yaw', +yaw.toFixed(3));
+  s.set('pitch', +pitch.toFixed(3));
+  s.set('dist', +dist.toFixed(3));
+  return s.toString();
+}
+
+// Links come from outside, so every value is checked; anything missing or invalid keeps its current value.
+function setState(str) {
+  const s = new URLSearchParams(str);
+  const num = (k) => {
+    const v = parseFloat(s.get(k));
+    return Number.isFinite(v) ? v : null;
+  };
+  const f = num('f');
+  if (f === null || !PRESETS[f]) return;
+  ui.formula.selected(String(f));
+  onFormulaChange();
+  const preset = num('preset');
+  if (preset !== null && PRESETS[f][preset]) {
+    ui.preset.selected(String(preset));
+    applyPreset();
+  }
+  for (const k of STATE_SLIDERS) {
+    const v = num(k);
+    if (v !== null) ui[k].slider.value(v);   // range inputs clamp to their min/max
+  }
+  const flag = (k, box) => { if (s.has(k)) box.checked(s.get(k) === '1'); };
+  flag('julia', ui.julia);
+  flag('anim', ui.animate);
+  flag('animRot', ui.animRot);
+  const pal = num('pal');
+  if (pal !== null && pal >= 0 && pal <= 4) ui.palette.selected(String(pal));
+  if (num('yaw') !== null) yaw = num('yaw');
+  if (num('pitch') !== null) pitch = constrain(num('pitch'), -1.5, 1.5);
+  if (num('dist') !== null) dist = constrain(num('dist'), 1.2, 10);
+  updateVisibility();
+}
+
+// Keep the address bar current, at most twice a second.
+function writeStateToURL() {
+  if (millis() - lastStateWrite < 500) return;
+  lastStateWrite = millis();
+  const hash = '#' + getState();
+  if (location.hash !== hash) history.replaceState(null, '', hash);
+}
+
+function copyLink() {
+  history.replaceState(null, '', '#' + getState());
+  const copy = navigator.clipboard ? navigator.clipboard.writeText(location.href) : Promise.reject();
+  copy.then(() => ui.note.html('Link copied.'))
+      .catch(() => {
+        // Clipboard refused: show the link selected so Ctrl+C copies it.
+        ui.note.html('Press Ctrl+C to copy the link:');
+        const field = createInput(location.href).parent(ui.note);
+        field.elt.readOnly = true;
+        field.style('width', '100%');
+        field.elt.select();
+      });
+}
+
 function draw() {
   if (!pg || glLost) return;
   guardFrameTime();
@@ -541,6 +623,7 @@ function draw() {
   pg.rect(0, 0, pg.width, pg.height);
 
   image(pg, 0, 0, width, height);
+  writeStateToURL();
 }
 
 function mouseDragged() {
