@@ -347,7 +347,7 @@ Surface sampleSurface(vec3 p, float e, vec3 L) {
       sca *= 0.8;
       if (j == 12 && dot(n, L) <= 0.0) break;   // facing away from the light: nothing to shadow
     } else {
-      sha = min(sha, 8.0 * d / st);
+      sha = min(sha, 12.0 * d / st);    // higher = crisper penumbra
       st += clamp(d, 0.005, 0.2);
       if (sha < 0.01 || st > 3.0) break;
     }
@@ -402,7 +402,10 @@ void main() {
 
   if (hit) {
     vec3 p = ro + rd * t;
-    vec3 L = normalize(vec3(0.6, 0.8, 0.5));
+    // Key light from the upper left of the view, so every orbit angle gets the same side
+    // lighting and lobes cast visible shadows. (A fixed world light sat behind the camera
+    // in the default view, which hid the shadows.)
+    vec3 L = normalize(-0.6 * rt + 0.7 * up - 0.4 * fw);
     Surface s = sampleSurface(p, max(eps, 1e-5), L);
     vec3 n = s.n;
     vec3 base = uColorMode == 1
@@ -410,7 +413,7 @@ void main() {
       ? palette(0.5 + 0.35 * clamp(1.5 * s.curv, -1.0, 1.0))
       : palette(trap * 1.2 + 0.2);                         // orbit-trap stripes
 
-    vec3 back = normalize(vec3(-0.5, -0.3, -0.6));
+    vec3 back = normalize(0.6 * rt - 0.2 * up + 0.5 * fw);   // fill from behind, opposite the key
     float dif = max(dot(n, L), 0.0);
     float amb = 0.5 + 0.5 * n.y;
     float bac = max(dot(n, back), 0.0);
