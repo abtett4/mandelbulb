@@ -194,8 +194,10 @@ float quatDE(vec4 p, out float trap) {
 }
 
 vec2 cpow(vec2 z, float n) {
+  float r = length(z);
+  if (r == 0.0) return vec2(0.0);   // atan(0, 0) is undefined and can return NaN
   float a = atan(z.y, z.x) * n;
-  return pow(length(z), n) * vec2(cos(a), sin(a));
+  return pow(r, n) * vec2(cos(a), sin(a));
 }
 
 // Bicomplex z^n + c. With z = (a + bi) + (c + di)j, the idempotent basis splits it
@@ -218,13 +220,13 @@ float bicomplexDE(vec4 p, out float trap) {
   for (int i = ZERO; i < MAX_ITER_4D; i++) {
     if (i >= uIter) break;
     if (!eu) {
-      dru = uPower * pow(ru, uPower - 1.0) * dru + k;
+      dru = uPower * pow(max(ru, 1e-6), uPower - 1.0) * dru + k;   // pow(0, 0) is undefined at n = 1
       u = cpow(u, uPower) + cu;
       ru = length(u);
       eu = ru > BAILOUT;
     }
     if (!ev) {
-      drv = uPower * pow(rv, uPower - 1.0) * drv + k;
+      drv = uPower * pow(max(rv, 1e-6), uPower - 1.0) * drv + k;
       v = cpow(v, uPower) + cv;
       rv = length(v);
       ev = rv > BAILOUT;
@@ -232,8 +234,11 @@ float bicomplexDE(vec4 p, out float trap) {
     trap = min(trap, length(vec2(ru, rv)) * 0.7071);
     if (eu && ev) break;
   }
-  float du = eu ? 0.5 * log(ru) * ru / dru : 0.0;
-  float dv = ev ? 0.5 * log(rv) * rv / drv : 0.0;
+  // Both halves use the estimate even if they haven't escaped, like the other formulas do.
+  // Returning exactly 0 there left a flat field inside the set, so the surface normal could
+  // come out as normalize(0) = NaN, which drew as black patches.
+  float du = 0.5 * log(max(ru, 1e-6)) * ru / dru;
+  float dv = 0.5 * log(max(rv, 1e-6)) * rv / drv;
   return max(du, dv) * 0.7071;
 }
 
@@ -291,7 +296,7 @@ Surface sampleSurface(vec3 p, float e, vec3 L) {
     if (j < 4) {
       nAcc += tetra(j) * d;
       if (j == 3) {
-        n = normalize(nAcc);
+        n = dot(nAcc, nAcc) > 1e-20 ? normalize(nAcc) : -L;   // flat field: avoid NaN
         so = p + n * e * 4.0;
       }
     } else if (j < 8) {
