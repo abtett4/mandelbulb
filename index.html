@@ -296,6 +296,14 @@ vec3 tetra(int i) {
 
 struct Surface { vec3 n; float curv; float ao; float sha; };
 
+// The polynomial formulas' distance estimate is noisy at pixel scale, which showed as speckle
+// on power-nine. Sampling their normals 3 pixels wide halves the speckle and keeps the detail.
+#if FORMULA >= 3 && FORMULA <= 5
+const float NORMAL_WIDTH = 3.0;
+#else
+const float NORMAL_WIDTH = 1.0;
+#endif
+
 // Every shading sample after a hit goes through this one loop, so DE() is compiled in only two
 // places (here and the ray march); the compiler copies DE() into each call site.
 // Samples, in order:
@@ -318,7 +326,7 @@ Surface sampleSurface(vec3 p, float e, vec3 L) {
     if (j >= last) break;
     if (uColorMode == 0 && j >= 4 && j < 8) continue;   // curvature not shown
     vec3 q;
-    if (j < 4) q = p + tetra(j) * e;
+    if (j < 4) q = p + tetra(j) * e * NORMAL_WIDTH;
     else if (j < 8) q = p + tetra(j - 4) * ec;
     else if (j < 13) q = p + (0.01 + 0.05 * float(j - 8)) * n;
     else q = so + L * st;
