@@ -21,6 +21,7 @@
   #panel h1 { font-size: 14px; margin: 0 0 4px; color: #fff; }
   #panel .definition { margin: 0 0 6px; color: #aaa; font-size: 11px; line-height: 1.45; }
   #panel .nowrap { white-space: nowrap; }
+  #panel .explain { margin-top: 3px; color: #aaa; font-size: 11px; line-height: 1.45; }
   #panel label { display: flex; justify-content: space-between; margin-top: 6px; }
   #panel label:has(input[type=checkbox]) { justify-content: flex-start; gap: 4px; }
   #panel input[type=range], #panel select { width: 100%; margin: 2px 0 0; }
@@ -471,27 +472,75 @@ const FORMULAS = [
   [5, 'Power-nine'], [1, 'Quaternion'], [2, 'Bicomplex']
 ];
 
+// Plain-language explanation of each formula, shown under the Formula menu.
+const FORMULA_ABOUT = {
+  0: 'Pick a point in space. Over and over, turn it around the center and stretch its distance ' +
+     'from the center, then add the starting point back. If the point stays close forever, it is ' +
+     'part of the shape. The power n sets how much it turns and stretches each time.',
+  6: 'The same recipe as the Mandelbulb, but the up-and-down turn (p) and the around-the-middle ' +
+     'turn (q) can be different amounts, so the bumps can come out taller or wider.',
+  3: 'Instead of turning and stretching, this recipe only multiplies and adds the x, y and z ' +
+     'numbers. It is built so the distance from the center gets cubed each time.',
+  4: 'Starts from the flat power-5 Mandelbrot recipe and repeats it the same way along x, y and z, ' +
+     'so the shape looks the same from every side, like a dice. C mixes two directions together.',
+  5: 'Built so that a flat slice through the middle is exactly the flat power-9 Mandelbrot ' +
+     'picture. The whole shape grows 32 little bulbs.',
+  1: 'Quaternions are numbers with four parts instead of one, so this shape lives in four ' +
+     'dimensions. We can only see three, so the screen shows one 3D slice of it, like a single ' +
+     'slice of a scan. The rule is simple: square the number, then add c.',
+  2: 'Another kind of four-part number. Inside, each one is really two ordinary flat numbers ' +
+     'working side by side, so the shape is two flat Mandelbrot sets combined. That is why it ' +
+     'looks like a blocky crystal.'
+};
+
 // Known-good starting points per formula. Unlisted values come from DEFAULTS.
+// `about` is the plain-language note shown under the Preset menu.
 const DEFAULTS = { power: 8, iter: 10, theta: 0, phi: 0, p: 8, q: 8, w: 0, rot4: 0, qc: 0, julia: false, c: [-0.29, -0.4, 0.34, 0.44] };
 const PRESETS = {
-  0: [{ name: 'Classic (n = 8)' }, { name: 'Three lobes (n = 3)', power: 3 }, { name: 'Twisted', theta: 1.0, phi: 0.5 }],
-  6: [{ name: 'p = 4, q = 8', p: 4 }, { name: 'p = 8, q = 4', q: 4 }],
-  3: [{ name: 'Cubic' }],
-  4: [{ name: 'Quintic (-z^5)' }, { name: 'Quintic, C = 2', qc: 2 }],
-  5: [{ name: 'Power-nine', iter: 8 }],
+  0: [
+    { name: 'Classic (n = 8)',
+      about: 'Power 8, the version most Mandelbulb pictures show.' },
+    { name: 'Three lobes (n = 3)', power: 3,
+      about: 'Power 3: fewer, bigger bumps and a chunkier body.' },
+    { name: 'Twisted', theta: 1.0, phi: 0.5,
+      about: 'The classic bulb with its turning angles nudged, so the bumps lean and twist.' }
+  ],
+  6: [
+    { name: 'p = 4, q = 8', p: 4,
+      about: 'The up-and-down turn is half as strong, so there are fewer bands from top to bottom.' },
+    { name: 'p = 8, q = 4', q: 4,
+      about: 'The around-the-middle turn is half as strong, so there are fewer bumps around the sides.' }
+  ],
+  3: [{ name: 'Cubic', about: 'The cubic recipe exactly as Wikipedia writes it. Smooth and rounded.' }],
+  4: [
+    { name: 'Quintic (-z^5)',
+      about: 'The power-5 recipe with a minus sign, which gives a neater shape. Knobs stick out on every side.' },
+    { name: 'Quintic, C = 2', qc: 2,
+      about: 'Turning C up to 2 stretches the knobs out into long spikes, like a star.' }
+  ],
+  5: [{ name: 'Power-nine', iter: 8,
+        about: 'The power-nine shape with its 32 bulbs. Power 9 grows so fast that 8 repeats are enough.' }],
   // Julia c values sit near the edge of the 2D Mandelbrot set (real part, imaginary part on y),
   // where Julia sets have the most structure.
   1: [
-    { name: 'Julia: classic', julia: true, iter: 30 },
-    { name: 'Julia: rabbit', julia: true, iter: 30, c: [-0.123, 0.745, 0, 0] },
-    { name: 'Julia: San Marco', julia: true, iter: 30, c: [-0.75, 0.05, 0, 0] },
-    { name: 'Julia: shells', julia: true, iter: 30, c: [-0.162, 0.163, 0.56, -0.599] },
-    { name: 'Mandelbrot (spun)', julia: false }
+    { name: 'Julia: classic', julia: true, iter: 30,
+      about: 'A Julia set uses one fixed c for every point. This c is a well-known choice that makes folded, swirly ribbons.' },
+    { name: 'Julia: rabbit', julia: true, iter: 30, c: [-0.123, 0.745, 0, 0],
+      about: 'Uses the c of the famous "rabbit" Julia set, whose flat picture looks like a rabbit with ears. In 4D the ears become swirls.' },
+    { name: 'Julia: San Marco', julia: true, iter: 30, c: [-0.75, 0.05, 0, 0],
+      about: 'Its flat version is named after St Mark\'s Basilica in Venice. Spun into 4D, it turns into stacked rings.' },
+    { name: 'Julia: shells', julia: true, iter: 30, c: [-0.162, 0.163, 0.56, -0.599],
+      about: 'A c that points in all four directions at once, giving shells nested around a cage.' },
+    { name: 'Mandelbrot (spun)', julia: false,
+      about: 'Every point is its own c. The result is the flat Mandelbrot set spun around its middle line, like a vase made on a pottery wheel.' }
   ],
   2: [
-    { name: 'Tetrabrot', power: 2 },
-    { name: 'Rabbit x rabbit (Julia)', power: 2, julia: true, c: [-0.12, 0.75, 0, 0] },
-    { name: 'Tilted 4D slice', power: 2, rot4: 0.8 }
+    { name: 'Tetrabrot', power: 2,
+      about: 'Power 2, the classic bicomplex shape: a crystal made of stacked boxes.' },
+    { name: 'Rabbit x rabbit (Julia)', power: 2, julia: true, c: [-0.12, 0.75, 0, 0],
+      about: 'Two rabbit Julia sets combined, one in each hidden half of the number.' },
+    { name: 'Tilted 4D slice', power: 2, rot4: 0.8,
+      about: 'The same Tetrabrot, but the slice is tilted into the fourth dimension, so you see a different cross-section.' }
   ]
 };
 
@@ -679,9 +728,11 @@ function buildUI() {
   ui.formula = createSelect().parent(ui.panel);
   FORMULAS.forEach(([id, name]) => ui.formula.option(name, id));
   ui.formula.changed(onFormulaChange);
+  ui.formulaAbout = createDiv('').class('explain').parent(ui.panel);
   createElement('label', 'Preset').parent(ui.panel);
   ui.preset  = createSelect().parent(ui.panel);
   ui.preset.changed(applyPreset);
+  ui.presetAbout = createDiv('').class('explain').parent(ui.panel);
   ui.reset   = createButton('Reset to preset').parent(ui.panel);
   ui.reset.mousePressed(applyPreset);
   const actions = createDiv('').class('actions').parent(ui.panel);
@@ -759,6 +810,8 @@ function onFormulaChange() {
 // Palette, glow, quality and animation speed are left alone.
 function applyPreset() {
   const p = { ...DEFAULTS, ...PRESETS[formula()][int(ui.preset.value())] };
+  ui.formulaAbout.elt.textContent = FORMULA_ABOUT[formula()];
+  ui.presetAbout.elt.textContent = p.about;
   ui.iter.slider.attribute('max', is4D() ? 40 : 15);   // matches the shader's loop caps
   for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'qc']) ui[k].slider.value(p[k]);
   ['cx', 'cy', 'cz', 'cw'].forEach((k, i) => ui[k].slider.value(p.c[i]));
