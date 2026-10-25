@@ -2,7 +2,9 @@
 
 A real-time GPU raymarcher for exploring Mandelbulb-family fractals, built with p5.js for a creative-code class.
 
-Everything is in one file, `index.html`. Double-click it to open it in a browser. It needs an internet connection the first time, to load p5.js 1.9.4 from cdnjs.
+Double-click `index.html` to open it in a browser. It works offline: p5.js 1.9.4 is included in `lib/`, and the page only falls back to cdnjs if that file is missing.
+
+Live version: https://abtett4.github.io/mandelbulb/
 
 ## Controls
 
@@ -10,6 +12,9 @@ Everything is in one file, `index.html`. Double-click it to open it in a browser
 - **Formula** picks the fractal. **Preset** loads a known-good starting point for it, and **Reset to preset** returns there if you get lost.
 - **Power n**, **Iterations**, **Theta/Phi offset** and the 4D sliders change the shape. **Palette** and **Glow** change the look.
 - **Quality** sets the render resolution. Lower it if frames are slow.
+- **Copy link** copies a link to the current view. The address bar always holds it too, so any view can be bookmarked or put in slides.
+- **Save PNG** saves the current view at full window resolution.
+- **Tour** (or **T**) hides the panel and slowly orbits through every preset, cross-fading between them. Any click or key stops it.
 
 ## Formulas
 

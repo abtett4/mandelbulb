@@ -351,6 +351,7 @@ function setup() {
   c.mousePressed(() => { dragging = true; });
   c.elt.addEventListener('wheel', (e) => {
     e.preventDefault();
+    if (touring) stopTour();
     dist = constrain(dist * Math.exp(e.deltaY * 0.001), 1.2, 10);
   }, { passive: false });
   ui.overlay = createDiv('').id('overlay');
@@ -461,8 +462,10 @@ function buildUI() {
   ui.copyLink.mousePressed(copyLink);
   ui.savePng = createButton('Save PNG').parent(actions);
   ui.savePng.mousePressed(savePNG);
+  ui.tour = createButton('Tour').parent(actions);
+  ui.tour.mousePressed(startTour);
   ui.note    = createDiv('').class('note').parent(ui.panel);
-  createDiv('Drag to orbit · scroll to zoom · H hides panel').class('hint').parent(ui.panel);
+  createDiv('Drag to orbit · scroll to zoom · H hides panel · T starts a tour (any key or click stops it)').class('hint').parent(ui.panel);
   onFormulaChange();
 }
 
@@ -592,6 +595,7 @@ function draw() {
   const step = (deltaTime / 1000) * ui.speed.slider.value() * TWO_PI;
   if (ui.animate.checked()) animPhase += step;
   if (ui.animRot.checked()) rotPhase += step * 0.25;
+  if (touring) updateTour();
 
   for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
     const v = k === 'power' ? currentPower() : k === 'rot4' ? currentRot4() : ui[k].slider.value();
@@ -600,7 +604,65 @@ function draw() {
 
   renderFractal();
   image(pg, 0, 0, width, height);
+  drawFade();
   writeStateToURL();
+}
+
+// ---------- Tour ----------
+// Visits every preset in menu order, orbiting the camera and cross-fading between stops.
+const TOUR_STOP_MS = 12000;
+const TOUR_FADE_MS = 1500;
+const TOUR = FORMULAS.flatMap(([id]) => PRESETS[id].map((_, i) => [id, i]));
+let touring = false, tourIndex = 0, tourStopAt = 0, tourStartedAt = 0;
+let fadeImg = null, fadeStart = 0;
+
+function startTour() {
+  touring = true;
+  tourStartedAt = millis();
+  tourIndex = 0;
+  ui.panel.hide();
+  goToTourStop(false);
+}
+
+function stopTour() {
+  touring = false;
+  fadeImg = null;
+  ui.panel.show();
+}
+
+function goToTourStop(fade) {
+  if (fade) {
+    fadeImg = get();                    // snapshot of the last frame to fade out over the new one
+    fadeStart = millis();
+  }
+  const [f, i] = TOUR[tourIndex];
+  ui.formula.selected(String(f));
+  onFormulaChange();
+  ui.preset.selected(String(i));
+  applyPreset();
+  if (is4D()) ui.animRot.checked(true);
+  else if (hasPower()) ui.animate.checked(true);
+  tourStopAt = millis();
+}
+
+function updateTour() {
+  yaw += deltaTime * 0.00015;           // slow orbit, about 0.15 rad per second
+  if (millis() - tourStopAt > TOUR_STOP_MS) {
+    tourIndex = (tourIndex + 1) % TOUR.length;
+    goToTourStop(true);
+  }
+}
+
+function drawFade() {
+  if (!fadeImg) return;
+  const t = (millis() - fadeStart) / TOUR_FADE_MS;
+  if (t >= 1) {
+    fadeImg = null;
+    return;
+  }
+  tint(255, 255 * (1 - t));
+  image(fadeImg, 0, 0, width, height);
+  noTint();
 }
 
 function currentRot4() { return (ui.rot4.slider.value() + rotPhase) % TWO_PI; }
@@ -656,8 +718,18 @@ function mouseDragged() {
 
 function mouseReleased() { dragging = false; }
 
+function mousePressed() {
+  // Ignore the click on the Tour button that started it.
+  if (touring && millis() - tourStartedAt > 300) stopTour();
+}
+
 function keyPressed() {
+  if (touring) {
+    stopTour();
+    return;
+  }
   if (key === 'h' || key === 'H') ui.panel.style('display', ui.panel.style('display') === 'none' ? 'block' : 'none');
+  if (key === 't' || key === 'T') startTour();
 }
 
 function windowResized() {
