@@ -100,6 +100,7 @@ uniform int   uColorMode; // 0 orbit-trap stripes, 1 curvature
 uniform int   uShadows;   // 1 = soft shadows on
 uniform float uP;         // theta multiplier (= n except for the spherical (p, q) family)
 uniform float uQ;         // phi multiplier
+uniform float uQuinticC; // the quintic's C constant (Wikipedia), 0 to 2
 uniform int   uFormula;   // 0 Mandelbulb, 1 quaternion, 2 bicomplex, 3 cubic, 4 quintic, 5 power-nine, 6 spherical (p, q)
 uniform int   uJulia;     // 4D formulas: 1 = Julia set with constant uC
 uniform vec4  uC;
@@ -142,10 +143,10 @@ vec3 cubicStep(vec3 v) {
               z * z * z - 3.0 * z * x * x + z * y * y);
 }
 
-// One coordinate of the quintic with A = B = C = D = 0.
+// One coordinate of the quintic with A = B = D = 0 and C = uQuinticC.
 float q5(float a, float b, float c) {
   float a2 = a * a, b2 = b * b, c2 = c * c;
-  return a * a2 * a2 - 10.0 * a * a2 * (b2 + c2) + 5.0 * a * (b2 * b2 + c2 * c2);
+  return a * a2 * a2 - 10.0 * a * a2 * (b2 + c2) + 5.0 * a * (b2 * b2 + uQuinticC * b2 * c2 + c2 * c2);
 }
 
 // Based on z -> -z^5, which the article notes gives the more pleasing shape.
@@ -456,12 +457,12 @@ const FORMULAS = [
 ];
 
 // Known-good starting points per formula. Unlisted values come from DEFAULTS.
-const DEFAULTS = { power: 8, iter: 10, theta: 0, phi: 0, p: 8, q: 8, w: 0, rot4: 0, julia: false, c: [-0.29, -0.4, 0.34, 0.44] };
+const DEFAULTS = { power: 8, iter: 10, theta: 0, phi: 0, p: 8, q: 8, w: 0, rot4: 0, qc: 0, julia: false, c: [-0.29, -0.4, 0.34, 0.44] };
 const PRESETS = {
   0: [{ name: 'Classic (n = 8)' }, { name: 'Three lobes (n = 3)', power: 3 }, { name: 'Twisted', theta: 1.0, phi: 0.5 }],
   6: [{ name: 'p = 4, q = 8', p: 4 }, { name: 'p = 8, q = 4', q: 4 }],
   3: [{ name: 'Cubic' }],
-  4: [{ name: 'Quintic (-z^5)' }],
+  4: [{ name: 'Quintic (-z^5)' }, { name: 'Quintic, C = 2', qc: 2 }],
   5: [{ name: 'Power-nine', iter: 8 }],
   // Julia c values sit near the edge of the 2D Mandelbrot set (real part, imaginary part on y),
   // where Julia sets have the most structure.
@@ -632,6 +633,7 @@ function buildUI() {
   ui.phi     = addSlider('Phi offset', 0, TWO_PI, 0, 0.01, 2);
   ui.p       = addSlider('Theta multiplier p', 1, 16, 8, 0.01, 2);
   ui.q       = addSlider('Phi multiplier q', 1, 16, 8, 0.01, 2);
+  ui.qc      = addSlider('Quintic C', 0, 2, 0, 0.01, 2);
   ui.w       = addSlider('4D slice w', -1.5, 1.5, 0, 0.01, 2);
   ui.rot4    = addSlider('4D rotation (x-w)', 0, TWO_PI, 0, 0.01, 2);
   ui.julia   = createCheckbox(' Julia set', false).parent(ui.target);
@@ -678,7 +680,7 @@ function onFormulaChange() {
 function applyPreset() {
   const p = { ...DEFAULTS, ...PRESETS[formula()][int(ui.preset.value())] };
   ui.iter.slider.attribute('max', is4D() ? 40 : 15);   // matches the shader's loop caps
-  for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4']) ui[k].slider.value(p[k]);
+  for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'qc']) ui[k].slider.value(p[k]);
   ['cx', 'cy', 'cz', 'cw'].forEach((k, i) => ui[k].slider.value(p.c[i]));
   ui.julia.checked(p.julia);
   ui.animate.checked(false);
@@ -699,6 +701,7 @@ function updateVisibility() {
   show(ui.phi.box, f === 0 || f === 6);
   show(ui.p.box, f === 6);
   show(ui.q.box, f === 6);
+  show(ui.qc.box, f === 4);
   for (const el of [ui.w.box, ui.rot4.box, ui.animRot, ui.julia]) show(el, is4D());
   for (const el of [ui.cx.box, ui.cy.box, ui.cz.box, ui.cw.box, ui.animC]) show(el, is4D() && ui.julia.checked());
   // Cubic, quintic and power-nine have nothing to animate, so the whole section goes.
@@ -714,7 +717,7 @@ function currentPower() {
 // ---------- Shareable links ----------
 // The view lives in the URL after '#', e.g. #f=0&preset=0&power=8&...&yaw=0.6
 // Quality is left out so a link never forces a heavy setting on a slower machine.
-const STATE_SLIDERS = ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow'];
+const STATE_SLIDERS = ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'qc', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow'];
 let lastStateWrite = 0;
 
 function getState() {
@@ -804,7 +807,7 @@ function draw() {
   if (ui.animC.checked()) cPhase += step * 0.15;
   if (touring) updateTour();
 
-  for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
+  for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'qc', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
     const ci = ['cx', 'cy', 'cz', 'cw'].indexOf(k);
     const v = k === 'power' ? currentPower() : k === 'rot4' ? currentRot4()
             : ci >= 0 ? currentC()[ci] : ui[k].slider.value();
@@ -938,6 +941,7 @@ function renderFractal() {
   sh.setUniform('uPower', power);
   sh.setUniform('uP', formula() === 6 ? ui.p.slider.value() : power);
   sh.setUniform('uQ', formula() === 6 ? ui.q.slider.value() : power);
+  sh.setUniform('uQuinticC', ui.qc.slider.value());
   sh.setUniform('uIter', ui.iter.slider.value());
   sh.setUniform('uThetaOff', ui.theta.slider.value());
   sh.setUniform('uPhiOff', ui.phi.slider.value());
