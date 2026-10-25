@@ -1,4 +1,4 @@
-# Mandelbulb
+# Mandelbulb Simulator
 
 A real-time GPU raymarcher for exploring Mandelbulb-family fractals, built with p5.js for a creative-code class.
 

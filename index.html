@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mandelbulb</title>
+<title>Mandelbulb Simulator</title>
 <!-- Local copy so the page works offline; falls back to the CDN if lib/ is missing. -->
 <script src="lib/p5.min.js"></script>
 <script>window.p5 || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"><\/script>');</script>
@@ -723,7 +723,7 @@ function equationHTML(f, julia) {
 }
 
 function buildUI() {
-  ui.panel = createDiv('<h1>Mandelbulb</h1>').id('panel');
+  ui.panel = createDiv('<h1>Mandelbulb Simulator</h1>').id('panel');
   createP('A real-time explorer for Mandelbulb-family fractals, drawn live on your graphics card. ' +
           'Move a slider and watch the shape change instantly, right in the browser.')
     .class('about').parent(ui.panel);
