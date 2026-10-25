@@ -8,7 +8,8 @@ Live version: https://abtett4.github.io/mandelbulb/
 
 ## Controls
 
-- **Drag** to orbit, **scroll** to zoom, **H** to hide the panel.
+- **Drag** to orbit, **scroll** (or the **Zoom** slider in the Camera section) to zoom, **H** to hide the panel.
+- **W/S**, **A/D** and **Q/E** move the point the camera orbits: forward and back, sideways, and down and up. To explore inside, steer that point into a crevice, zoom in close and orbit around it. Movement slows as you zoom in. **Re-center view** puts the point back at the middle.
 - The panel groups its controls into **Parameters**, **Animation** and **Graphics** sections. Click a heading (or focus it and press Enter) to open or close it.
 - **Formula** picks the fractal, and the formula's equation appears under it. Symbols in blue match a slider (for example **n** is Power), and they light up while you hover over or focus that slider. **Preset** loads a known-good starting point for it, and **Reset to preset** returns there if you get lost.
 - **Power n**, **Iterations**, **Theta/Phi offset** and the 4D sliders change the shape. For Julia sets, **Animate c** morphs the shape by moving c along the edge of the Mandelbrot set.

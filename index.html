@@ -92,6 +92,7 @@ out vec4 fragColor;
 
 uniform vec2  uRes;
 uniform vec3  uCamPos;
+uniform vec3  uTarget;   // the point the camera orbits and looks at
 uniform float uPower;
 uniform int   uIter;
 // Always 0, but the compiler can't know that, so it keeps loops as loops instead of unrolling
@@ -382,9 +383,9 @@ vec3 palette(float t) {
 void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
 
-  // Look-at camera aimed at the origin
+  // Look-at camera aimed at the orbit point
   vec3 ro = uCamPos;
-  vec3 fw = normalize(-ro);
+  vec3 fw = normalize(uTarget - ro);
   vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
   vec3 up = cross(rt, fw);
   vec3 rd = normalize(fw * 1.5 + uv.x * rt + uv.y * up);
@@ -435,8 +436,8 @@ void main() {
         + 0.35 * spe * sha
         + 0.3 * rim * ao * palette(0.65);
 
-    // Fog: surfaces behind the fractal's centre fade toward the background, which reads as depth.
-    float fog = clamp((t - length(ro) + 0.8) / 2.5, 0.0, 1.0) * 0.55;
+    // Fog: surfaces behind the orbit point fade toward the background, which reads as depth.
+    float fog = clamp((t - length(uTarget - ro) + 0.8) / 2.5, 0.0, 1.0) * 0.55;
     col = mix(col, bg, fog);
   }
 
@@ -500,7 +501,7 @@ function setup() {
   c.mousePressed(() => { dragging = true; });
   c.elt.addEventListener('wheel', (e) => {
     e.preventDefault();
-    dist = constrain(dist * Math.exp(e.deltaY * 0.001), 1.2, 10);
+    setDist(dist * Math.exp(e.deltaY * 0.001));
   }, { passive: false });
   ui.overlay = createDiv('').id('overlay');
   buildUI();
@@ -725,7 +726,17 @@ function buildUI() {
   ui.quality.slider.changed(makeBuffer);
   ui.shadows = createCheckbox(' Soft shadows (slower)', false).parent(ui.target);
 
-  createDiv('Drag to orbit · scroll to zoom · H hides panel · T starts a tour (Space or click pauses, Esc exits)').class('hint').parent(ui.panel);
+  addSection('Camera', false);
+  ui.zoom    = addSlider('Zoom (distance)', 0, 1, 0, 0.001, 2);
+  ui.zoom.slider.input(() => {
+    dist = ZOOM_MIN * Math.pow(ZOOM_MAX / ZOOM_MIN, ui.zoom.slider.value());
+  });
+  createDiv('W/S forward and back · A/D sideways · Q/E down and up. These move the point the camera orbits.')
+    .class('hint').parent(ui.target);
+  ui.recenter = createButton('Re-center view').parent(ui.target);
+  ui.recenter.mousePressed(recenter);
+
+  createDiv('Drag to orbit · scroll to zoom · WASD/QE to move · H hides panel · T starts a tour (Space or click pauses, Esc exits)').class('hint').parent(ui.panel);
   onFormulaChange();
 }
 
@@ -751,7 +762,8 @@ function applyPreset() {
   ui.animRot.checked(false);
   ui.animC.checked(false);
   animPhase = rotPhase = cPhase = 0;
-  yaw = 0.6; pitch = 0.35; dist = 4.5;
+  yaw = 0.6; pitch = 0.35;
+  recenter();
   updateVisibility();
 }
 
@@ -800,6 +812,7 @@ function getState() {
   s.set('yaw', +yaw.toFixed(3));
   s.set('pitch', +pitch.toFixed(3));
   s.set('dist', +dist.toFixed(3));
+  ['tx', 'ty', 'tz'].forEach((k, i) => s.set(k, +pivot[i].toFixed(3)));
   return s.toString();
 }
 
@@ -835,7 +848,8 @@ function setState(str) {
   flag('shadows', ui.shadows);
   if (num('yaw') !== null) yaw = num('yaw');
   if (num('pitch') !== null) pitch = constrain(num('pitch'), -1.5, 1.5);
-  if (num('dist') !== null) dist = constrain(num('dist'), 1.2, 10);
+  if (num('dist') !== null) setDist(num('dist'));
+  ['tx', 'ty', 'tz'].forEach((k, i) => { if (num(k) !== null) pivot[i] = constrain(num(k), -5, 5); });
   updateVisibility();
 }
 
@@ -871,6 +885,8 @@ function draw() {
   if (ui.animRot.checked()) rotPhase += step * 0.25;
   if (ui.animC.checked()) cPhase += step * 0.15;
   if (touring) updateTour();
+  movePivot();
+  ui.zoom.val.html(nf(dist, 1, 2));
 
   for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'qc', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
     const ci = ['cx', 'cy', 'cz', 'cw'].indexOf(k);
@@ -990,19 +1006,65 @@ function currentC() {
   return [re, im * dir[0], im * dir[1], im * dir[2]];
 }
 
+// ---------- Camera ----------
+// The camera orbits a movable point (pivot) at distance dist. WASD/QE move the point
+// relative to the view, so the camera travels with it: steer the point into a crevice,
+// zoom in close and orbit around it from inside.
+const ZOOM_MIN = 0.05, ZOOM_MAX = 10, DEFAULT_DIST = 4.5;
+let pivot = [0, 0, 0];
+const MOVE_KEYS = { 87: [0, 0, 1], 83: [0, 0, -1], 65: [-1, 0, 0], 68: [1, 0, 0], 69: [0, 1, 0], 81: [0, -1, 0] };   // W S A D E Q
+
+function cameraPos() {
+  return [
+    pivot[0] + dist * cos(pitch) * sin(yaw),
+    pivot[1] + dist * sin(pitch),
+    pivot[2] + dist * cos(pitch) * cos(yaw)
+  ];
+}
+
+// Zoom slider runs 0-1 on a log scale, so both far views and close-ups get room.
+function setDist(d) {
+  dist = constrain(d, ZOOM_MIN, ZOOM_MAX);
+  ui.zoom.slider.value(Math.log(dist / ZOOM_MIN) / Math.log(ZOOM_MAX / ZOOM_MIN));
+}
+
+function recenter() {
+  pivot = [0, 0, 0];
+  setDist(DEFAULT_DIST);
+}
+
+// Move the orbit point with WASD (forward/back/sideways) and Q/E (down/up), at a speed
+// proportional to the zoom distance, so close-ups move in small steps. Ignored while a menu
+// or slider has focus, so typing in a select doesn't also move the view.
+function movePivot() {
+  const el = document.activeElement;
+  if (touring || (el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName))) return;
+  let [mx, my, mz] = [0, 0, 0];
+  for (const code in MOVE_KEYS) {
+    if (!keyIsDown(+code)) continue;
+    const [a, b, c] = MOVE_KEYS[code];
+    mx += a; my += b; mz += c;
+  }
+  if (!mx && !my && !mz) return;
+  const cam = cameraPos();
+  const fw = createVector(pivot[0] - cam[0], pivot[1] - cam[1], pivot[2] - cam[2]).normalize();
+  const rt = fw.copy().cross(createVector(0, 1, 0)).normalize();
+  const up = rt.copy().cross(fw);
+  const step = dist * 0.8 * deltaTime / 1000;
+  const m = p5.Vector.mult(fw, mz).add(p5.Vector.mult(rt, mx)).add(p5.Vector.mult(up, my)).mult(step);
+  pivot = pivot.map((v, i) => constrain(v + [m.x, m.y, m.z][i], -5, 5));
+}
+
 // Draw one frame of the fractal into the WEBGL buffer.
 function renderFractal() {
   const power = currentPower();
-  const cam = [
-    dist * cos(pitch) * sin(yaw),
-    dist * sin(pitch),
-    dist * cos(pitch) * cos(yaw)
-  ];
+  const cam = cameraPos();
 
   sh = currentShader();
   pg.shader(sh);
   sh.setUniform('uRes', [pg.width, pg.height]);
   sh.setUniform('uCamPos', cam);
+  sh.setUniform('uTarget', pivot);
   sh.setUniform('uPower', power);
   sh.setUniform('uP', formula() === 6 ? ui.p.slider.value() : power);
   sh.setUniform('uQ', formula() === 6 ? ui.q.slider.value() : power);
