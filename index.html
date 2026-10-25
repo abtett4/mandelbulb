@@ -55,6 +55,8 @@ uniform float uPower;
 uniform int   uIter;
 // Escape radius: 4 costs at most one extra iteration over 2 and gives a cleaner distance estimate.
 const float BAILOUT = 4.0;
+// Quadratic 4D formulas gain detail slowly, so they get a higher iteration cap than the 3D ones (15).
+const int MAX_ITER_4D = 40;
 uniform float uThetaOff;
 uniform float uPhiOff;
 uniform float uGlow;
@@ -172,7 +174,7 @@ float quatDE(vec4 p, out float trap) {
   float k = uJulia == 1 ? 0.0 : 1.0;
   float r2 = dot(z, z);
   trap = 1e10;
-  for (int i = 0; i < 15; i++) {
+  for (int i = 0; i < MAX_ITER_4D; i++) {
     if (i >= uIter) break;
     dz = 2.0 * qmul(z, dz) + vec4(k, 0.0, 0.0, 0.0);
     z = qmul(z, z) + c;
@@ -206,7 +208,7 @@ float bicomplexDE(vec4 p, out float trap) {
   float dru = 1.0, drv = 1.0;
   bool eu = false, ev = false;   // escaped flags; an escaped half stops iterating
   trap = 1e10;
-  for (int i = 0; i < 15; i++) {
+  for (int i = 0; i < MAX_ITER_4D; i++) {
     if (i >= uIter) break;
     if (!eu) {
       dru = uPower * pow(ru, uPower - 1.0) * dru + k;
@@ -307,7 +309,7 @@ void main() {
 let pg, sh, ui = {};
 let yaw, pitch, dist;
 let dragging = false;
-let animPhase = 0, rotPhase = 0;
+let animPhase = 0, rotPhase = 0, cPhase = 0;
 let slowFrames = 0;     // run of slow frames; negative = grace period after a rebuild
 let glLost = false;
 
@@ -331,9 +333,13 @@ const PRESETS = {
   3: [{ name: 'Cubic' }],
   4: [{ name: 'Quintic (-z^5)' }],
   5: [{ name: 'Power-nine', iter: 8 }],
+  // Julia c values sit near the edge of the 2D Mandelbrot set (real part, imaginary part on y),
+  // where Julia sets have the most structure.
   1: [
-    { name: 'Julia', julia: true },
-    { name: 'Julia: basilica', julia: true, c: [-1, 0.2, 0, 0] },
+    { name: 'Julia: classic', julia: true, iter: 30 },
+    { name: 'Julia: rabbit', julia: true, iter: 30, c: [-0.123, 0.745, 0, 0] },
+    { name: 'Julia: San Marco', julia: true, iter: 30, c: [-0.75, 0.05, 0, 0] },
+    { name: 'Julia: shells', julia: true, iter: 30, c: [-0.162, 0.163, 0.56, -0.599] },
     { name: 'Mandelbrot (spun)', julia: false }
   ],
   2: [
@@ -445,6 +451,7 @@ function buildUI() {
   ui.animRot = createCheckbox(' Animate 4D rotation', false).parent(ui.panel);
   ui.julia   = createCheckbox(' Julia set', false).parent(ui.panel);
   ui.julia.changed(updateVisibility);
+  ui.animC   = createCheckbox(' Animate c (along the Mandelbrot edge)', false).parent(ui.panel);
   ui.cx      = addSlider('c.x', -1, 1, -0.29, 0.01, 2);
   ui.cy      = addSlider('c.y', -1, 1, -0.4, 0.01, 2);
   ui.cz      = addSlider('c.z', -1, 1, 0.34, 0.01, 2);
@@ -483,12 +490,14 @@ function onFormulaChange() {
 // Palette, glow, quality and animation speed are left alone.
 function applyPreset() {
   const p = { ...DEFAULTS, ...PRESETS[formula()][int(ui.preset.value())] };
+  ui.iter.slider.attribute('max', is4D() ? 40 : 15);   // matches the shader's loop caps
   for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4']) ui[k].slider.value(p[k]);
   ['cx', 'cy', 'cz', 'cw'].forEach((k, i) => ui[k].slider.value(p.c[i]));
   ui.julia.checked(p.julia);
   ui.animate.checked(false);
   ui.animRot.checked(false);
-  animPhase = rotPhase = 0;
+  ui.animC.checked(false);
+  animPhase = rotPhase = cPhase = 0;
   yaw = 0.6; pitch = 0.35; dist = 4.5;
   updateVisibility();
 }
@@ -504,7 +513,7 @@ function updateVisibility() {
   show(ui.p.box, f === 6);
   show(ui.q.box, f === 6);
   for (const el of [ui.w.box, ui.rot4.box, ui.animRot, ui.julia]) show(el, is4D());
-  for (const k of ['cx', 'cy', 'cz', 'cw']) show(ui[k].box, is4D() && ui.julia.checked());
+  for (const el of [ui.cx.box, ui.cy.box, ui.cz.box, ui.cw.box, ui.animC]) show(el, is4D() && ui.julia.checked());
 }
 
 function currentPower() {
@@ -527,6 +536,7 @@ function getState() {
   s.set('julia', ui.julia.checked() ? 1 : 0);
   s.set('anim', ui.animate.checked() ? 1 : 0);
   s.set('animRot', ui.animRot.checked() ? 1 : 0);
+  s.set('animC', ui.animC.checked() ? 1 : 0);
   s.set('pal', ui.palette.value());
   s.set('yaw', +yaw.toFixed(3));
   s.set('pitch', +pitch.toFixed(3));
@@ -558,6 +568,7 @@ function setState(str) {
   flag('julia', ui.julia);
   flag('anim', ui.animate);
   flag('animRot', ui.animRot);
+  flag('animC', ui.animC);
   const pal = num('pal');
   if (pal !== null && pal >= 0 && pal <= 4) ui.palette.selected(String(pal));
   if (num('yaw') !== null) yaw = num('yaw');
@@ -595,10 +606,13 @@ function draw() {
   const step = (deltaTime / 1000) * ui.speed.slider.value() * TWO_PI;
   if (ui.animate.checked()) animPhase += step;
   if (ui.animRot.checked()) rotPhase += step * 0.25;
+  if (ui.animC.checked()) cPhase += step * 0.15;
   if (touring) updateTour();
 
   for (const k of ['power', 'iter', 'theta', 'phi', 'p', 'q', 'w', 'rot4', 'cx', 'cy', 'cz', 'cw', 'speed', 'glow', 'quality']) {
-    const v = k === 'power' ? currentPower() : k === 'rot4' ? currentRot4() : ui[k].slider.value();
+    const ci = ['cx', 'cy', 'cz', 'cw'].indexOf(k);
+    const v = k === 'power' ? currentPower() : k === 'rot4' ? currentRot4()
+            : ci >= 0 ? currentC()[ci] : ui[k].slider.value();
     ui[k].val.html(nf(v, 1, ui[k].digits));
   }
 
@@ -640,7 +654,8 @@ function goToTourStop(fade) {
   onFormulaChange();
   ui.preset.selected(String(i));
   applyPreset();
-  if (is4D()) ui.animRot.checked(true);
+  if (is4D() && ui.julia.checked()) ui.animC.checked(true);
+  else if (is4D()) ui.animRot.checked(true);
   else if (hasPower()) ui.animate.checked(true);
   tourStopAt = millis();
 }
@@ -667,6 +682,21 @@ function drawFade() {
 
 function currentRot4() { return (ui.rot4.slider.value() + rotPhase) % TWO_PI; }
 
+// Julia constant. When animated, c travels just inside the main cardioid of the Mandelbrot set,
+// c = r e^(it)/2 - r^2 e^(2it)/4 with r = 0.98, so every Julia set on the way is connected and
+// close to the edge. The imaginary part points along the c sliders' (y, z, w) direction.
+function currentC() {
+  const c = ['cx', 'cy', 'cz', 'cw'].map((k) => ui[k].slider.value());
+  if (!ui.animC.checked()) return c;
+  const r = 0.98, t = cPhase;
+  const re = (r / 2) * cos(t) - (r * r / 4) * cos(2 * t);
+  const im = (r / 2) * sin(t) - (r * r / 4) * sin(2 * t);
+  let dir = c.slice(1);
+  const len = Math.hypot(...dir);
+  dir = len > 1e-6 ? dir.map((d) => d / len) : [1, 0, 0];
+  return [re, im * dir[0], im * dir[1], im * dir[2]];
+}
+
 // Draw one frame of the fractal into the WEBGL buffer.
 function renderFractal() {
   const power = currentPower();
@@ -689,7 +719,7 @@ function renderFractal() {
   sh.setUniform('uPalette', int(ui.palette.value()));
   sh.setUniform('uFormula', formula());
   sh.setUniform('uJulia', ui.julia.checked() ? 1 : 0);
-  sh.setUniform('uC', [ui.cx.slider.value(), ui.cy.slider.value(), ui.cz.slider.value(), ui.cw.slider.value()]);
+  sh.setUniform('uC', currentC());
   sh.setUniform('uW', ui.w.slider.value());
   sh.setUniform('uRot4', currentRot4());
   pg.rect(0, 0, pg.width, pg.height);
