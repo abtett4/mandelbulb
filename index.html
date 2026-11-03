@@ -281,9 +281,8 @@ float bicomplexDE(vec4 p, out float trap) {
     trap = min(trap, length(vec2(ru, rv)) * 0.7071);
     if (eu && ev) break;
   }
-  // Both halves use the estimate even if they haven't escaped, like the other formulas do.
-  // Returning exactly 0 there left a flat field inside the set, so the surface normal could
-  // come out as normalize(0) = NaN, which drew as black patches.
+  // Both halves use the estimate even if they haven't escaped: returning 0 inside the set
+  // gives a flat field whose normal is NaN, which draws as black patches.
   float du = 0.5 * log(max(ru, 1e-6)) * ru / dru;
   float dv = 0.5 * log(max(rv, 1e-6)) * rv / drv;
   return max(du, dv) * 0.7071;
@@ -419,8 +418,7 @@ void main() {
   if (hit) {
     vec3 p = ro + rd * t;
     // Key light from the upper left of the view, so every orbit angle gets the same side
-    // lighting and lobes cast visible shadows. (A fixed world light sat behind the camera
-    // in the default view, which hid the shadows.)
+    // lighting and lobes cast visible shadows.
     vec3 L = normalize(-0.6 * rt + 0.7 * up - 0.4 * fw);
     Surface s = sampleSurface(p, max(eps, 1e-5), L);
     vec3 n = s.n;
